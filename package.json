@@ -1,14 +1,28 @@
 {
-  "name": "folderize",
-  "displayName": "Folderize",
+  "name": "folderize-projects",
+  "displayName": "Folderizer",
   "description": "%folderize.description%",
-  "version": "0.0.4",
-  "publisher": "your-publisher-id",
+  "version": "0.0.6",
+  "publisher": "giovane-breno",
+  "license": "MIT",
+  "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.90.0"
   },
   "categories": [
     "Other"
+  ],
+  "keywords": [
+    "project manager",
+    "project management",
+    "projects",
+    "workspace switcher",
+    "workspace manager",
+    "folder switcher",
+    "project switcher",
+    "sidebar",
+    "favorites",
+    "recent projects"
   ],
   "repository": {
     "type": "git",
@@ -18,6 +32,9 @@
     "url": "https://github.com/giovane-breno/folderize/issues"
   },
   "homepage": "https://github.com/giovane-breno/folderize#readme",
+  "sponsor": {
+    "url": "https://github.com/sponsors/giovane-breno"
+  },
   "qna": "marketplace",
   "l10n": "./l10n",
   "activationEvents": [
@@ -52,6 +69,17 @@
           "showCollapseAll": true
         },
         {
+          "id": "folderize.favoritesView",
+          "name": "%folderize.view.favorites%",
+          "visibility": "collapsed",
+          "when": "folderize.hasFavorites"
+        },
+        {
+          "id": "folderize.recentsView",
+          "name": "%folderize.view.recents%",
+          "visibility": "collapsed"
+        },
+        {
           "id": "folderize.helpView",
           "name": "%folderize.view.aboutUs%",
           "visibility": "collapsed"
@@ -62,6 +90,10 @@
       {
         "view": "folderize.projectsView",
         "contents": "%folderize.viewsWelcome.projects%"
+      },
+      {
+        "view": "folderize.recentsView",
+        "contents": "%folderize.viewsWelcome.recents%"
       }
     ],
     "commands": [
@@ -112,6 +144,22 @@
         "title": "%folderize.command.openProjectInNewWindow%"
       },
       {
+        "command": "folderize.openInTerminal",
+        "title": "%folderize.command.openInTerminal%"
+      },
+      {
+        "command": "folderize.revealInFileManager",
+        "title": "%folderize.command.revealInFileManager%"
+      },
+      {
+        "command": "folderize.copyPath",
+        "title": "%folderize.command.copyPath%"
+      },
+      {
+        "command": "folderize.openProjectGithub",
+        "title": "%folderize.command.openProjectGithub%"
+      },
+      {
         "command": "folderize.manage",
         "title": "%folderize.command.manage%"
       },
@@ -147,6 +195,11 @@
       {
         "command": "folderize.toggleFavorite",
         "title": "%folderize.command.toggleFavorite%"
+      },
+      {
+        "command": "folderize.clearRecents",
+        "title": "%folderize.command.clearRecents%",
+        "icon": "$(clear-all)"
       }
     ],
     "menus": {
@@ -175,32 +228,57 @@
           "command": "folderize.manage",
           "when": "view == folderize.projectsView",
           "group": "1_manage@3"
+        },
+        {
+          "command": "folderize.clearRecents",
+          "when": "view == folderize.recentsView",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
         {
           "command": "folderize.openProject",
-          "when": "view == folderize.projectsView && (viewItem == project || viewItem == projectFavorite)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
           "group": "1_open@1"
         },
         {
           "command": "folderize.openProjectInNewWindow",
-          "when": "view == folderize.projectsView && (viewItem == project || viewItem == projectFavorite)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
           "group": "1_open@2"
         },
         {
+          "command": "folderize.openInTerminal",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
+          "group": "1_open@3"
+        },
+        {
+          "command": "folderize.revealInFileManager",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
+          "group": "1_open@4"
+        },
+        {
+          "command": "folderize.openProjectGithub",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
+          "group": "1_open@5"
+        },
+        {
+          "command": "folderize.copyPath",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite || viewItem == projectMissing)",
+          "group": "1_open@6"
+        },
+        {
           "command": "folderize.toggleFavorite",
-          "when": "view == folderize.projectsView && (viewItem == project || viewItem == projectFavorite)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
           "group": "2_edit@1"
         },
         {
           "command": "folderize.renameProject",
-          "when": "view == folderize.projectsView && (viewItem == project || viewItem == projectFavorite)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
           "group": "2_edit@2"
         },
         {
           "command": "folderize.removeProject",
-          "when": "view == folderize.projectsView && (viewItem == project || viewItem == projectFavorite || viewItem == projectMissing)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite || viewItem == projectMissing)",
           "group": "3_remove"
         },
         {

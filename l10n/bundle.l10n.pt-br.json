@@ -1,0 +1,86 @@
+{
+  "Organize your projects": "Organize seus projetos",
+  "Version": "Versão",
+  "Report a Problem": "Reportar problema",
+  "Report a problem": "Reportar um problema",
+  "Star": "Estrela",
+  "Give a star on GitHub": "Dar uma estrela no GitHub",
+
+  "1 project": "1 projeto",
+  "{0} projects": "{0} projetos",
+  "Folderize: open quick project search": "Folderize: abrir busca rápida de projetos",
+  "Projects": "Projetos",
+  "Favorites": "Favoritos",
+  "Uncategorized": "Sem categoria",
+  "No projects added yet.": "Nenhum projeto adicionado ainda.",
+  "Search project...": "Buscar projeto...",
+  "Add current folder": "Adicionar pasta atual",
+
+  "Folderize doesn't have a public repository yet.": "O Folderize ainda não tem um repositório público.",
+  "Folderize doesn't have a public repository to report issues yet.": "O Folderize ainda não tem um repositório público para reportar problemas.",
+  "Thanks! Leave a star on GitHub ⭐": "Obrigado! Deixe uma estrela no GitHub ⭐",
+
+  "Folder not found on disk: {0}": "Pasta não encontrada no disco: {0}",
+  "Path copied.": "Caminho copiado.",
+  "\"{0}\" is not a Git repository.": "\"{0}\" não é um repositório Git.",
+  "\"{0}\" does not have an \"origin\" remote configured.": "\"{0}\" não tem um remote \"origin\" configurado.",
+
+  "New display name for the project": "Novo nome de exibição do projeto",
+
+  "Remove \"{0}\" from the listing? The folder stays on disk, but is hidden until you add it again.": "Remover \"{0}\" da listagem? A pasta continua no disco, mas fica oculta até você adicioná-la novamente.",
+  "Remove {0} folders ({1}) from the listing? They stay on disk, but are hidden until you add them again.": "Remover {0} pastas ({1}) da listagem? Elas continuam no disco, mas ficam ocultas até você adicioná-las novamente.",
+  "Remove": "Remover",
+
+  "New category name": "Nome da nova categoria",
+  "A category named \"{0}\" already exists.": "Já existe uma categoria chamada \"{0}\".",
+  "Remove category \"{0}\"? 1 project moves back to \"Uncategorized\".": "Remover a categoria \"{0}\"? 1 projeto volta para \"Sem categoria\".",
+  "Remove category \"{0}\"? {1} projects move back to \"Uncategorized\".": "Remover a categoria \"{0}\"? {1} projetos voltam para \"Sem categoria\".",
+
+  "No folder is open in this window.": "Nenhuma pasta está aberta nesta janela.",
+  "Which open folder do you want to add?": "Qual pasta aberta você quer adicionar?",
+
+  "Adds the folder already open in this window": "Adiciona a pasta já aberta nesta janela",
+  "Add project": "Adicionar projeto",
+  "Choose a specific folder to add as a single project": "Escolha uma pasta específica para adicionar como um único projeto",
+  "Add root folder": "Adicionar pasta raiz",
+  "Choose a folder and list its subfolders as projects": "Escolha uma pasta e liste suas subpastas como projetos",
+  "What do you want to add?": "O que você quer adicionar?",
+
+  "Add as root folder": "Adicionar como pasta raiz",
+  "Continue as project": "Continuar como projeto",
+  "\"{0}\" looks like it contains multiple projects ({1} found), not a single project.": "\"{0}\" parece conter vários projetos ({1} encontrados), não um único projeto.",
+
+  "Add as project": "Adicionar como projeto",
+  "Continue as root folder": "Continuar como pasta raiz",
+  "\"{0}\" looks like a project (has .git/package.json/etc.), not a folder with multiple projects inside.": "\"{0}\" parece ser um projeto (tem .git/package.json/etc.), não uma pasta com vários projetos dentro.",
+
+  "No subfolders found in \"{0}\".": "Nenhuma subpasta encontrada em \"{0}\".",
+  "Select projects to add ({0} found)": "Selecione os projetos para adicionar ({0} encontrados)",
+  "{0} project(s) added from \"{1}\".": "{0} projeto(s) adicionado(s) de \"{1}\".",
+
+  "Add": "Adicionar",
+  "Ignore": "Ignorar",
+  "Folderize detected a new folder: \"{0}\". Add it?": "O Folderize detectou uma nova pasta: \"{0}\". Adicionar?",
+
+  "Folderize found {0} new project(s) near \"{1}\". Add them?": "O Folderize encontrou {0} novo(s) projeto(s) perto de \"{1}\". Adicionar?",
+  "Add All": "Adicionar todos",
+  "Review": "Revisar",
+  "Select the projects to add ({0} found)": "Selecione os projetos para adicionar ({0} encontrados)",
+
+  "Copy/move/reorder the paths between categories and save (Cmd+S) to apply. \"Uncategorized\", \"Pinned\" and \"Root Folders\" are special.": "Copie/mova/reordene os caminhos entre categorias e salve (Cmd+S) para aplicar. \"Uncategorized\", \"Pinned\" e \"Root Folders\" são especiais.",
+  "Duplicate category in the file: \"{0}\".": "Categoria duplicada no arquivo: \"{0}\".",
+  "\"{0}\" must be a list of paths.": "\"{0}\" deve ser uma lista de caminhos.",
+  "\"{0}\" has an item that is not text.": "\"{0}\" tem um item que não é texto.",
+  "Path not found in \"Pinned\": \"{0}\".": "Caminho não encontrado em \"Pinned\": \"{0}\".",
+  "Path not found in \"{0}\": \"{1}\".": "Caminho não encontrado em \"{0}\": \"{1}\".",
+  "\"{0}\" appears in more than one category (\"{1}\" and \"{2}\").": "\"{0}\" aparece em mais de uma categoria (\"{1}\" e \"{2}\").",
+  "{0} project(s) do not appear in any category (add them to a section, even \"Uncategorized\"): {1}{2}": "{0} projeto(s) não aparecem em nenhuma categoria (adicione-os a uma seção, mesmo que seja \"Uncategorized\"): {1}{2}",
+  "Folderize listing updated.": "Listagem do Folderize atualizada.",
+  "Invalid JSON: {0}": "JSON inválido: {0}",
+  "Project added: {0}.": "Projeto adicionado: {0}.",
+
+  "not found on disk": "não encontrado no disco",
+  "open in this window": "aberto nesta janela",
+  "Open project": "Abrir projeto",
+  "Not found on disk": "Não encontrado no disco"
+}

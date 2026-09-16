@@ -23,12 +23,18 @@ import {
   ProjectsTreeProvider,
   UNCATEGORIZED,
 } from './projectsTreeProvider';
+import { FavoritesViewProvider } from './favoritesViewProvider';
 import { HelpViewProvider } from './helpViewProvider';
 import { OpenFolderDecorationProvider } from './openFolderDecorationProvider';
 import { openReorderPanel, ReorderCategory } from './reorderPanel';
+import { clearRecents, initRecents, pruneRecents, recordRecentOpen } from './recents';
+import { RecentsViewProvider } from './recentsViewProvider';
 
 export function activate(context: vscode.ExtensionContext) {
   let manageSaveListener: vscode.Disposable | undefined;
+
+  initRecents(context.globalState);
+  pruneRecents(new Set(listProjects().map((p) => p.fullPath)));
 
   const treeProvider = new ProjectsTreeProvider();
   const treeView = vscode.window.createTreeView('folderize.projectsView', {
@@ -36,6 +42,25 @@ export function activate(context: vscode.ExtensionContext) {
     dragAndDropController: treeProvider,
     canSelectMany: true,
   });
+
+  const favoritesProvider = new FavoritesViewProvider();
+  const favoritesView = vscode.window.createTreeView('folderize.favoritesView', {
+    treeDataProvider: favoritesProvider,
+    dragAndDropController: favoritesProvider,
+  });
+  context.subscriptions.push(favoritesView);
+
+  const recentsProvider = new RecentsViewProvider();
+  const recentsView = vscode.window.createTreeView('folderize.recentsView', {
+    treeDataProvider: recentsProvider,
+  });
+  context.subscriptions.push(recentsView);
+
+  function refreshAll(): void {
+    treeProvider.refresh();
+    favoritesProvider.refresh();
+    recentsProvider.refresh();
+  }
 
   const decorationProvider = new OpenFolderDecorationProvider();
   context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorationProvider));
@@ -47,33 +72,30 @@ export function activate(context: vscode.ExtensionContext) {
     )
   );
 
+  function describeCount(count: number): string {
+    return count === 1 ? vscode.l10n.t('1 project') : vscode.l10n.t('{0} projects', count);
+  }
+
   function updateDescription(): void {
-    const count = listProjects().length;
-    treeView.description = count === 1 ? '1 projeto' : `${count} projetos`;
+    treeView.description = describeCount(listProjects().length);
   }
   updateDescription();
   context.subscriptions.push(treeProvider.onDidChangeTreeData(() => updateDescription()));
 
-  async function assignToRootCategoryAtEnd(root: string, subPath: string): Promise<void> {
-    const categoryName = path.basename(root);
-    const categories = getCategories();
-    if (!categories.includes(categoryName)) {
-      await saveCategories([...categories, categoryName]);
-    }
-
-    const meta = getProjectMeta();
-    if (meta[subPath]?.category) {
-      return;
-    }
-    const maxOrder = Math.max(
-      -1,
-      ...Object.values(meta)
-        .filter((entry) => entry.category === categoryName)
-        .map((entry) => entry.order ?? 0)
-    );
-    meta[subPath] = { ...meta[subPath], category: categoryName, order: maxOrder + 1 };
-    await saveProjectMeta(meta);
+  function updateFavoritesDescription(): void {
+    const count = favoritesProvider.getChildren().length;
+    favoritesView.description = describeCount(count);
+    vscode.commands.executeCommand('setContext', 'folderize.hasFavorites', count > 0);
   }
+  updateFavoritesDescription();
+  context.subscriptions.push(favoritesProvider.onDidChangeTreeData(() => updateFavoritesDescription()));
+
+  function updateRecentsDescription(): void {
+    const count = recentsProvider.getChildren().length;
+    recentsView.description = count > 0 ? describeCount(count) : undefined;
+  }
+  updateRecentsDescription();
+  context.subscriptions.push(recentsProvider.onDidChangeTreeData(() => updateRecentsDescription()));
 
   let folderWatchers: vscode.Disposable[] = [];
   function setupFolderWatchers(): void {
@@ -95,14 +117,34 @@ export function activate(context: vscode.ExtensionContext) {
           }
         }
         if (isRealDirectory) {
-          await unexcludePath(uri.fsPath);
-          await assignToRootCategoryAtEnd(root, uri.fsPath);
+          // New folder is hidden until the user confirms, so it doesn't show up
+          // in the tree before they've had a chance to decide.
+          const config = vscode.workspace.getConfiguration('folderize');
+          const excludedPaths = config.get<string[]>('excludedPaths', []);
+          if (!excludedPaths.includes(uri.fsPath)) {
+            await config.update(
+              'excludedPaths',
+              [...excludedPaths, uri.fsPath],
+              vscode.ConfigurationTarget.Global
+            );
+          }
+
+          const add = vscode.l10n.t('Add');
+          const ignore = vscode.l10n.t('Ignore');
+          const choice = await vscode.window.showInformationMessage(
+            vscode.l10n.t('Folderize detected a new folder: "{0}". Add it?', name),
+            add,
+            ignore
+          );
+          if (choice === add) {
+            await unexcludePath(uri.fsPath);
+          }
         }
-        treeProvider.refresh();
+        refreshAll();
       });
       watcher.onDidDelete(() => {
         invalidateSubfolderCache(root);
-        treeProvider.refresh();
+        refreshAll();
       });
       folderWatchers.push(watcher);
       context.subscriptions.push(watcher);
@@ -111,6 +153,29 @@ export function activate(context: vscode.ExtensionContext) {
   setupFolderWatchers();
 
   async function addRootFolderPath(newPath: string): Promise<void> {
+    const subfolderPaths = getSubfolderPaths(newPath);
+
+    if (subfolderPaths.length === 0) {
+      vscode.window.showInformationMessage(vscode.l10n.t('No subfolders found in "{0}".', path.basename(newPath)));
+      return;
+    }
+
+    const picked = await vscode.window.showQuickPick(
+      subfolderPaths.map((p) => ({
+        label: path.basename(p),
+        description: p,
+        picked: true,
+        fullPath: p,
+      })),
+      {
+        canPickMany: true,
+        placeHolder: vscode.l10n.t('Select projects to add ({0} found)', subfolderPaths.length),
+      }
+    );
+    if (!picked) {
+      return;
+    }
+
     const config = vscode.workspace.getConfiguration('folderize');
     const current = config.get<string[]>('rootFolders', []);
     if (!current.includes(newPath)) {
@@ -119,26 +184,22 @@ export function activate(context: vscode.ExtensionContext) {
     await unexcludePath(newPath);
     await updateProjectMeta(newPath, { favorite: false });
 
-    const categoryName = path.basename(newPath);
-    const categories = getCategories();
-    if (!categories.includes(categoryName)) {
-      await saveCategories([...categories, categoryName]);
-    }
-
-    const subfolderPaths = getSubfolderPaths(newPath);
-    const meta = getProjectMeta();
+    const selectedPaths = new Set(picked.map((p) => p.fullPath));
+    const excludedPaths = config.get<string[]>('excludedPaths', []);
+    const newExcluded = new Set(excludedPaths);
     for (const subPath of subfolderPaths) {
-      await unexcludePath(subPath);
-      if (!meta[subPath]?.category) {
-        meta[subPath] = { ...meta[subPath], category: categoryName };
+      if (selectedPaths.has(subPath)) {
+        newExcluded.delete(subPath);
+      } else {
+        newExcluded.add(subPath);
       }
     }
-    await saveProjectMeta(meta);
+    await config.update('excludedPaths', [...newExcluded], vscode.ConfigurationTarget.Global);
 
-    treeProvider.refresh();
+    refreshAll();
 
     vscode.window.showInformationMessage(
-      `Pasta raiz adicionada: ${categoryName}. ${subfolderPaths.length} subpasta(s) encontrada(s) e agrupada(s) na categoria "${categoryName}" (você pode mover à vontade).`
+      vscode.l10n.t('{0} project(s) added from "{1}".', picked.length, path.basename(newPath))
     );
   }
 
@@ -150,8 +211,8 @@ export function activate(context: vscode.ExtensionContext) {
     }
     await unexcludePath(newPath);
     await updateProjectMeta(newPath, { favorite: false });
-    treeProvider.refresh();
-    vscode.window.showInformationMessage(`Projeto adicionado: ${path.basename(newPath)}.`);
+    refreshAll();
+    vscode.window.showInformationMessage(vscode.l10n.t('Project added: {0}.', path.basename(newPath)));
   }
 
   async function detectSiblingProjects(): Promise<void> {
@@ -180,18 +241,26 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
+    const addAll = vscode.l10n.t('Add All');
+    const review = vscode.l10n.t('Review');
+    const ignore = vscode.l10n.t('Ignore');
+
     const choice = await vscode.window.showInformationMessage(
-      `Folderize encontrou ${candidates.length} projeto(s) novo(s) perto de "${path.basename(currentPath)}". Adicionar?`,
-      'Adicionar todos',
-      'Revisar',
-      'Ignorar'
+      vscode.l10n.t(
+        'Folderize found {0} new project(s) near "{1}". Add them?',
+        candidates.length,
+        path.basename(currentPath)
+      ),
+      addAll,
+      review,
+      ignore
     );
 
-    if (choice === 'Adicionar todos') {
+    if (choice === addAll) {
       for (const p of candidates) {
         await addProjectPath(p);
       }
-    } else if (choice === 'Revisar') {
+    } else if (choice === review) {
       const picked = await vscode.window.showQuickPick(
         candidates.map((p) => ({
           label: path.basename(p),
@@ -199,24 +268,25 @@ export function activate(context: vscode.ExtensionContext) {
           picked: true,
           fullPath: p,
         })),
-        { canPickMany: true, placeHolder: `Selecione os projetos pra adicionar (${candidates.length} encontrados)` }
+        { canPickMany: true, placeHolder: vscode.l10n.t('Select the projects to add ({0} found)', candidates.length) }
       );
       for (const p of picked ?? []) {
         await addProjectPath(p.fullPath);
       }
-    } else if (choice === 'Ignorar') {
+    } else if (choice === ignore) {
       await context.globalState.update('folderize.ignoredScanParents', [...ignoredParents, parentDir]);
     }
   }
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBarItem.tooltip = 'Folderize: abrir busca rápida de projetos';
+  statusBarItem.tooltip = vscode.l10n.t('Folderize: open quick project search');
   statusBarItem.command = 'folderize.quickOpen';
   statusBarItem.show();
 
   function updateStatusBarItem(): void {
     const folders = vscode.workspace.workspaceFolders;
-    const name = folders && folders.length > 0 ? path.basename(folders[0].uri.fsPath) : 'Projetos';
+    const name =
+      folders && folders.length > 0 ? path.basename(folders[0].uri.fsPath) : vscode.l10n.t('Projects');
     statusBarItem.text = `$(folder-library) ${name}`;
   }
   updateStatusBarItem();
@@ -235,7 +305,7 @@ export function activate(context: vscode.ExtensionContext) {
       if (url) {
         vscode.env.openExternal(vscode.Uri.parse(url));
       } else {
-        vscode.window.showInformationMessage('Folderize ainda não tem um repositório público.');
+        vscode.window.showInformationMessage(vscode.l10n.t("Folderize doesn't have a public repository yet."));
       }
     }),
 
@@ -244,7 +314,9 @@ export function activate(context: vscode.ExtensionContext) {
       if (url) {
         vscode.env.openExternal(vscode.Uri.parse(url));
       } else {
-        vscode.window.showInformationMessage('Folderize ainda não tem um repositório público pra reportar problemas.');
+        vscode.window.showInformationMessage(
+          vscode.l10n.t("Folderize doesn't have a public repository to report issues yet.")
+        );
       }
     }),
 
@@ -252,9 +324,9 @@ export function activate(context: vscode.ExtensionContext) {
       const url = context.extension.packageJSON.repository?.url as string | undefined;
       if (url) {
         vscode.env.openExternal(vscode.Uri.parse(url));
-        vscode.window.showInformationMessage('Obrigado! Deixa uma estrela lá no GitHub ⭐');
+        vscode.window.showInformationMessage(vscode.l10n.t('Thanks! Leave a star on GitHub ⭐'));
       } else {
-        vscode.window.showInformationMessage('Folderize ainda não tem um repositório público.');
+        vscode.window.showInformationMessage(vscode.l10n.t("Folderize doesn't have a public repository yet."));
       }
     }),
 
@@ -270,7 +342,7 @@ export function activate(context: vscode.ExtensionContext) {
       const currentFolderNotAdded = openFolders.find((f) => !projectPaths.has(f.uri.fsPath));
       if (currentFolderNotAdded) {
         items.push({
-          label: '$(save) Adicionar pasta atual',
+          label: `$(save) ${vscode.l10n.t('Add current folder')}`,
           description: currentFolderNotAdded.uri.fsPath,
           addCurrent: true,
         });
@@ -278,7 +350,7 @@ export function activate(context: vscode.ExtensionContext) {
 
       const pinned = projects.filter((p) => meta[p.fullPath]?.favorite);
       if (pinned.length > 0) {
-        items.push({ label: 'Fixados', kind: vscode.QuickPickItemKind.Separator });
+        items.push({ label: vscode.l10n.t('Favorites'), kind: vscode.QuickPickItemKind.Separator });
         items.push(
           ...pinned.map((p) => ({ label: p.label, description: p.fullPath, fullPath: p.fullPath }))
         );
@@ -300,7 +372,7 @@ export function activate(context: vscode.ExtensionContext) {
 
       for (const id of orderedIds) {
         items.push({
-          label: id === UNCATEGORIZED ? 'Sem categoria' : id,
+          label: id === UNCATEGORIZED ? vscode.l10n.t('Uncategorized') : id,
           kind: vscode.QuickPickItemKind.Separator,
         });
         items.push(
@@ -309,11 +381,11 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       if (items.length === 0) {
-        vscode.window.showInformationMessage('Nenhum projeto cadastrado ainda.');
+        vscode.window.showInformationMessage(vscode.l10n.t('No projects added yet.'));
         return;
       }
 
-      const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Buscar projeto...' });
+      const picked = await vscode.window.showQuickPick(items, { placeHolder: vscode.l10n.t('Search project...') });
       if (!picked) {
         return;
       }
@@ -330,16 +402,19 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }),
 
-    vscode.commands.registerCommand('folderize.refresh', () => {
+    vscode.commands.registerCommand('folderize.refresh', async () => {
       invalidateSubfolderCache();
-      treeProvider.refresh();
+      await pruneRecents(new Set(listProjects().map((p) => p.fullPath)));
+      refreshAll();
     }),
 
-    vscode.commands.registerCommand('folderize.openProject', (item: ProjectTreeItem) => {
+    vscode.commands.registerCommand('folderize.openProject', async (item: ProjectTreeItem) => {
       if (!fs.existsSync(item.fullPath)) {
-        vscode.window.showErrorMessage(`Pasta não encontrada no disco: ${item.fullPath}`);
+        vscode.window.showErrorMessage(vscode.l10n.t('Folder not found on disk: {0}', item.fullPath));
         return;
       }
+      await recordRecentOpen(item.fullPath);
+      refreshAll();
       vscode.commands.executeCommand(
         'vscode.openFolder',
         vscode.Uri.file(item.fullPath),
@@ -347,11 +422,13 @@ export function activate(context: vscode.ExtensionContext) {
       );
     }),
 
-    vscode.commands.registerCommand('folderize.openProjectInNewWindow', (item: ProjectTreeItem) => {
+    vscode.commands.registerCommand('folderize.openProjectInNewWindow', async (item: ProjectTreeItem) => {
       if (!fs.existsSync(item.fullPath)) {
-        vscode.window.showErrorMessage(`Pasta não encontrada no disco: ${item.fullPath}`);
+        vscode.window.showErrorMessage(vscode.l10n.t('Folder not found on disk: {0}', item.fullPath));
         return;
       }
+      await recordRecentOpen(item.fullPath);
+      refreshAll();
       vscode.commands.executeCommand(
         'vscode.openFolder',
         vscode.Uri.file(item.fullPath),
@@ -359,16 +436,60 @@ export function activate(context: vscode.ExtensionContext) {
       );
     }),
 
+    vscode.commands.registerCommand('folderize.openInTerminal', (item: ProjectTreeItem) => {
+      if (!fs.existsSync(item.fullPath)) {
+        vscode.window.showErrorMessage(vscode.l10n.t('Folder not found on disk: {0}', item.fullPath));
+        return;
+      }
+      const terminal = vscode.window.createTerminal({ name: item.label, cwd: item.fullPath });
+      terminal.show();
+    }),
+
+    vscode.commands.registerCommand('folderize.revealInFileManager', (item: ProjectTreeItem) => {
+      if (!fs.existsSync(item.fullPath)) {
+        vscode.window.showErrorMessage(vscode.l10n.t('Folder not found on disk: {0}', item.fullPath));
+        return;
+      }
+      vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(item.fullPath));
+    }),
+
+    vscode.commands.registerCommand('folderize.copyPath', async (item: ProjectTreeItem) => {
+      await vscode.env.clipboard.writeText(item.fullPath);
+      vscode.window.showInformationMessage(vscode.l10n.t('Path copied.'));
+    }),
+
+    vscode.commands.registerCommand('folderize.openProjectGithub', async (item: ProjectTreeItem) => {
+      const configPath = path.join(item.fullPath, '.git', 'config');
+      if (!fs.existsSync(configPath)) {
+        vscode.window.showInformationMessage(vscode.l10n.t('"{0}" is not a Git repository.', item.label));
+        return;
+      }
+      const gitConfig = fs.readFileSync(configPath, 'utf8');
+      const match = gitConfig.match(/\[remote "origin"\][^[]*url\s*=\s*(.+)/);
+      if (!match) {
+        vscode.window.showInformationMessage(
+          vscode.l10n.t('"{0}" does not have an "origin" remote configured.', item.label)
+        );
+        return;
+      }
+      let url = match[1].trim();
+      if (url.startsWith('git@')) {
+        url = url.replace(':', '/').replace('git@', 'https://');
+      }
+      url = url.replace(/\.git$/, '');
+      vscode.env.openExternal(vscode.Uri.parse(url));
+    }),
+
     vscode.commands.registerCommand('folderize.renameProject', async (item: ProjectTreeItem) => {
       const newName = await vscode.window.showInputBox({
-        prompt: 'Novo nome de exibição para o projeto',
+        prompt: vscode.l10n.t('New display name for the project'),
         value: item.label,
       });
       if (!newName || newName === item.label) {
         return;
       }
       await updateProjectMeta(item.fullPath, { displayName: newName });
-      treeProvider.refresh();
+      refreshAll();
     }),
 
     vscode.commands.registerCommand(
@@ -381,12 +502,19 @@ export function activate(context: vscode.ExtensionContext) {
           const names = fromRootFolder.map((t) => t.label).join(', ');
           const confirm = await vscode.window.showWarningMessage(
             fromRootFolder.length === 1
-              ? `Remover "${names}" da listagem? A pasta continua no disco, mas fica oculta até você adicioná-la de novo.`
-              : `Remover ${fromRootFolder.length} pastas (${names}) da listagem? Elas continuam no disco, mas ficam ocultas até você adicioná-las de novo.`,
+              ? vscode.l10n.t(
+                  'Remove "{0}" from the listing? The folder stays on disk, but is hidden until you add it again.',
+                  names
+                )
+              : vscode.l10n.t(
+                  'Remove {0} folders ({1}) from the listing? They stay on disk, but are hidden until you add them again.',
+                  fromRootFolder.length,
+                  names
+                ),
             { modal: true },
-            'Remover'
+            vscode.l10n.t('Remove')
           );
-          if (confirm !== 'Remover') {
+          if (confirm !== vscode.l10n.t('Remove')) {
             return;
           }
         }
@@ -394,7 +522,7 @@ export function activate(context: vscode.ExtensionContext) {
         for (const target of targets) {
           await removeProjectEverywhere(target.fullPath);
         }
-        treeProvider.refresh();
+        refreshAll();
       }
     ),
 
@@ -406,12 +534,12 @@ export function activate(context: vscode.ExtensionContext) {
         for (const target of targets) {
           await updateProjectMeta(target.fullPath, { favorite: !isFavorite });
         }
-        treeProvider.refresh();
+        refreshAll();
       }
     ),
 
     vscode.commands.registerCommand('folderize.addCategory', async () => {
-      const raw = await vscode.window.showInputBox({ prompt: 'Nome da nova categoria' });
+      const raw = await vscode.window.showInputBox({ prompt: vscode.l10n.t('New category name') });
       const name = raw?.trim();
       if (!name) {
         return;
@@ -419,16 +547,16 @@ export function activate(context: vscode.ExtensionContext) {
       const categories = getCategories();
       const exists = categories.some((c) => c.trim().toLowerCase() === name.toLowerCase());
       if (exists) {
-        vscode.window.showErrorMessage(`Já existe uma categoria chamada "${name}".`);
+        vscode.window.showErrorMessage(vscode.l10n.t('A category named "{0}" already exists.', name));
         return;
       }
       await saveCategories([...categories, name]);
-      treeProvider.refresh();
+      refreshAll();
     }),
 
     vscode.commands.registerCommand('folderize.renameCategory', async (item: CategoryTreeItem) => {
       const newName = await vscode.window.showInputBox({
-        prompt: 'Novo nome da categoria',
+        prompt: vscode.l10n.t('New category name'),
         value: item.categoryId,
       });
       if (!newName || newName === item.categoryId) {
@@ -436,10 +564,10 @@ export function activate(context: vscode.ExtensionContext) {
       }
       const ok = await renameCategoryEverywhere(item.categoryId, newName);
       if (!ok) {
-        vscode.window.showErrorMessage(`Já existe uma categoria chamada "${newName}".`);
+        vscode.window.showErrorMessage(vscode.l10n.t('A category named "{0}" already exists.', newName));
         return;
       }
-      treeProvider.refresh();
+      refreshAll();
     }),
 
     vscode.commands.registerCommand('folderize.removeCategory', async (item: CategoryTreeItem) => {
@@ -449,24 +577,33 @@ export function activate(context: vscode.ExtensionContext) {
       if (count > 0) {
         const confirm = await vscode.window.showWarningMessage(
           count === 1
-            ? `Remover a categoria "${item.categoryId}"? 1 projeto volta para "Sem categoria".`
-            : `Remover a categoria "${item.categoryId}"? ${count} projetos voltam para "Sem categoria".`,
+            ? vscode.l10n.t('Remove category "{0}"? 1 project moves back to "Uncategorized".', item.categoryId)
+            : vscode.l10n.t(
+                'Remove category "{0}"? {1} projects move back to "Uncategorized".',
+                item.categoryId,
+                count
+              ),
           { modal: true },
-          'Remover'
+          vscode.l10n.t('Remove')
         );
-        if (confirm !== 'Remover') {
+        if (confirm !== vscode.l10n.t('Remove')) {
           return;
         }
       }
 
       await removeCategoryEverywhere(item.categoryId);
-      treeProvider.refresh();
+      refreshAll();
+    }),
+
+    vscode.commands.registerCommand('folderize.clearRecents', async () => {
+      await clearRecents();
+      refreshAll();
     }),
 
     vscode.commands.registerCommand('folderize.addCurrentFolder', async () => {
       const folders = vscode.workspace.workspaceFolders;
       if (!folders || folders.length === 0) {
-        vscode.window.showInformationMessage('Nenhuma pasta está aberta nesta janela.');
+        vscode.window.showInformationMessage(vscode.l10n.t('No folder is open in this window.'));
         return;
       }
 
@@ -474,7 +611,7 @@ export function activate(context: vscode.ExtensionContext) {
         folders.length === 1
           ? folders[0]
           : await vscode.window.showWorkspaceFolderPick({
-              placeHolder: 'Qual pasta aberta você quer adicionar?',
+              placeHolder: vscode.l10n.t('Which open folder do you want to add?'),
             });
       if (!folder) {
         return;
@@ -488,26 +625,26 @@ export function activate(context: vscode.ExtensionContext) {
       const options: { label: string; description: string; command: string }[] = [];
       if (hasOpenFolder) {
         options.push({
-          label: '$(save) Adicionar pasta atual',
-          description: 'Adiciona a pasta já aberta nesta janela',
+          label: `$(save) ${vscode.l10n.t('Add current folder')}`,
+          description: vscode.l10n.t('Adds the folder already open in this window'),
           command: 'folderize.addCurrentFolder',
         });
       }
       options.push(
         {
-          label: '$(folder) Adicionar projeto',
-          description: 'Escolhe uma pasta específica pra adicionar como um único projeto',
+          label: `$(folder) ${vscode.l10n.t('Add project')}`,
+          description: vscode.l10n.t('Choose a specific folder to add as a single project'),
           command: 'folderize.addProject',
         },
         {
-          label: '$(root-folder) Adicionar pasta raiz',
-          description: 'Escolhe uma pasta e lista as subpastas dela como projetos',
+          label: `$(root-folder) ${vscode.l10n.t('Add root folder')}`,
+          description: vscode.l10n.t('Choose a folder and list its subfolders as projects'),
           command: 'folderize.addRootFolder',
         }
       );
 
       const choice = await vscode.window.showQuickPick(options, {
-        placeHolder: 'O que você quer adicionar?',
+        placeHolder: vscode.l10n.t('What do you want to add?'),
       });
       if (choice) {
         vscode.commands.executeCommand(choice.command);
@@ -519,7 +656,7 @@ export function activate(context: vscode.ExtensionContext) {
         canSelectFiles: false,
         canSelectFolders: true,
         canSelectMany: false,
-        openLabel: 'Adicionar como pasta raiz',
+        openLabel: vscode.l10n.t('Add as root folder'),
       });
       if (!picked || picked.length === 0) {
         return;
@@ -528,16 +665,21 @@ export function activate(context: vscode.ExtensionContext) {
       const newPath = picked[0].fsPath;
 
       if (looksLikeProject(newPath)) {
+        const addAsProject = vscode.l10n.t('Add as project');
+        const continueAsRoot = vscode.l10n.t('Continue as root folder');
         const choice = await vscode.window.showWarningMessage(
-          `"${path.basename(newPath)}" parece ser um projeto (tem .git/package.json/etc.), não uma pasta com vários projetos dentro.`,
-          'Adicionar como projeto',
-          'Continuar como pasta raiz'
+          vscode.l10n.t(
+            '"{0}" looks like a project (has .git/package.json/etc.), not a folder with multiple projects inside.',
+            path.basename(newPath)
+          ),
+          addAsProject,
+          continueAsRoot
         );
-        if (choice === 'Adicionar como projeto') {
+        if (choice === addAsProject) {
           await addProjectPath(newPath);
           return;
         }
-        if (choice !== 'Continuar como pasta raiz') {
+        if (choice !== continueAsRoot) {
           return;
         }
       }
@@ -550,7 +692,7 @@ export function activate(context: vscode.ExtensionContext) {
         canSelectFiles: false,
         canSelectFolders: true,
         canSelectMany: false,
-        openLabel: 'Adicionar como projeto',
+        openLabel: vscode.l10n.t('Add as project'),
       });
       if (!picked || picked.length === 0) {
         return;
@@ -562,16 +704,22 @@ export function activate(context: vscode.ExtensionContext) {
         const subfolderCount = countSubfolders(newPath);
         const subprojectCount = countSubfoldersLookingLikeProjects(newPath);
         if (subfolderCount >= 2 && subprojectCount >= 2) {
+          const addAsRoot = vscode.l10n.t('Add as root folder');
+          const continueAsProject = vscode.l10n.t('Continue as project');
           const choice = await vscode.window.showWarningMessage(
-            `"${path.basename(newPath)}" parece conter vários projetos dentro (${subprojectCount} encontrados), não ser um projeto único.`,
-            'Adicionar como pasta raiz',
-            'Continuar como projeto'
+            vscode.l10n.t(
+              '"{0}" looks like it contains multiple projects ({1} found), not a single project.',
+              path.basename(newPath),
+              subprojectCount
+            ),
+            addAsRoot,
+            continueAsProject
           );
-          if (choice === 'Adicionar como pasta raiz') {
+          if (choice === addAsRoot) {
             await addRootFolderPath(newPath);
             return;
           }
-          if (choice !== 'Continuar como projeto') {
+          if (choice !== continueAsProject) {
             return;
           }
         }
@@ -585,7 +733,7 @@ export function activate(context: vscode.ExtensionContext) {
       const allProjects = listProjects();
 
       if (allProjects.length === 0) {
-        vscode.window.showInformationMessage('Não há projetos cadastrados ainda.');
+        vscode.window.showInformationMessage(vscode.l10n.t('No projects added yet.'));
         return;
       }
 
@@ -597,7 +745,7 @@ export function activate(context: vscode.ExtensionContext) {
       const reorderCategories: ReorderCategory[] = orderedIds
         .map((id) => ({
           id,
-          title: id === UNCATEGORIZED ? 'Sem categoria' : id,
+          title: id === UNCATEGORIZED ? vscode.l10n.t('Uncategorized') : id,
           items: allProjects
             .filter((p) => (meta[p.fullPath]?.category ?? UNCATEGORIZED) === id)
             .sort((a, b) => (meta[a.fullPath]?.order ?? 0) - (meta[b.fullPath]?.order ?? 0))
@@ -619,7 +767,7 @@ export function activate(context: vscode.ExtensionContext) {
           });
         }
         await saveProjectMeta(meta);
-        treeProvider.refresh();
+        refreshAll();
       });
     }),
 
@@ -628,7 +776,7 @@ export function activate(context: vscode.ExtensionContext) {
       const allProjects = listProjects();
 
       if (allProjects.length === 0) {
-        vscode.window.showInformationMessage('Não há projetos cadastrados ainda.');
+        vscode.window.showInformationMessage(vscode.l10n.t('No projects added yet.'));
         return;
       }
 
@@ -637,8 +785,10 @@ export function activate(context: vscode.ExtensionContext) {
       );
       const orderedIds = getOrderedCategoryIds(usedCategories);
 
-      // As entradas usam o caminho completo (não o nome de exibição) como identificador,
-      // pra dois projetos com o mesmo nome não colidirem.
+      // Entries use the full path (not the display name) as identifier, so two
+      // projects with the same name never collide. These JSON keys ("Root Folders",
+      // "Pinned", "Uncategorized") are a stable data format, not UI text — they are
+      // intentionally not localized so the file always round-trips correctly.
       const data: Record<string, string[]> = {};
 
       data['Root Folders'] = vscode.workspace.getConfiguration('folderize').get<string[]>('rootFolders', []);
@@ -661,7 +811,7 @@ export function activate(context: vscode.ExtensionContext) {
 
       const knownPaths = new Set(allProjects.map((p) => p.fullPath));
 
-      // Nome único por janela/execução, pra duas janelas do VS Code não colidirem no mesmo arquivo.
+      // Unique name per window/run, so two VS Code windows never collide on the same file.
       const filePath = path.join(
         os.tmpdir(),
         `folderize-listagem-${process.pid}-${Date.now()}.json`
@@ -673,7 +823,9 @@ export function activate(context: vscode.ExtensionContext) {
       await vscode.window.showTextDocument(doc);
 
       vscode.window.showInformationMessage(
-        'Copie/mova/reordene os caminhos entre as categorias e salve (Cmd+S) pra aplicar. "Uncategorized", "Pinned" e "Root Folders" são especiais.'
+        vscode.l10n.t(
+          'Copy/move/reorder the paths between categories and save (Cmd+S) to apply. "Uncategorized", "Pinned" and "Root Folders" are special.'
+        )
       );
 
       manageSaveListener?.dispose();
@@ -684,13 +836,13 @@ export function activate(context: vscode.ExtensionContext) {
         try {
           const rawText = savedDoc.getText();
 
-          // Detecta chaves de categoria duplicadas no texto bruto (JSON.parse silenciosamente
-          // ficaria só com a última, escondendo o erro do usuário).
+          // Detects duplicate category keys in the raw text (JSON.parse would silently
+          // keep only the last one, hiding the user's mistake).
           const topLevelKeys = [...rawText.matchAll(/^ {2}"([^"]+)":/gm)].map((m) => m[1]);
           const seenKeys = new Set<string>();
           for (const key of topLevelKeys) {
             if (seenKeys.has(key)) {
-              throw new Error(`Categoria duplicada no arquivo: "${key}".`);
+              throw new Error(vscode.l10n.t('Duplicate category in the file: "{0}".', key));
             }
             seenKeys.add(key);
           }
@@ -703,11 +855,11 @@ export function activate(context: vscode.ExtensionContext) {
 
           for (const [categoryLabel, entries] of Object.entries(parsed)) {
             if (!Array.isArray(entries)) {
-              throw new Error(`"${categoryLabel}" deve ser uma lista de caminhos.`);
+              throw new Error(vscode.l10n.t('"{0}" must be a list of paths.', categoryLabel));
             }
             entries.forEach((entry) => {
               if (typeof entry !== 'string') {
-                throw new Error(`"${categoryLabel}" tem um item que não é texto.`);
+                throw new Error(vscode.l10n.t('"{0}" has an item that is not text.', categoryLabel));
               }
             });
 
@@ -728,10 +880,10 @@ export function activate(context: vscode.ExtensionContext) {
             });
           }
 
-          // Valida o documento inteiro antes de aplicar qualquer mudança.
-          for (const path of pinnedPaths) {
-            if (!knownPaths.has(path)) {
-              throw new Error(`Caminho não encontrado em "Pinned": "${path}".`);
+          // Validate the whole document before applying any change.
+          for (const p of pinnedPaths) {
+            if (!knownPaths.has(p)) {
+              throw new Error(vscode.l10n.t('Path not found in "Pinned": "{0}".', p));
             }
           }
 
@@ -739,11 +891,16 @@ export function activate(context: vscode.ExtensionContext) {
           for (const { categoryLabel, paths } of placements) {
             for (const p of paths) {
               if (!knownPaths.has(p)) {
-                throw new Error(`Caminho não encontrado em "${categoryLabel}": "${p}".`);
+                throw new Error(vscode.l10n.t('Path not found in "{0}": "{1}".', categoryLabel, p));
               }
               if (pathToCategory.has(p)) {
                 throw new Error(
-                  `"${path.basename(p)}" aparece em mais de uma categoria ("${pathToCategory.get(p)}" e "${categoryLabel}").`
+                  vscode.l10n.t(
+                    '"{0}" appears in more than one category ("{1}" and "{2}").',
+                    path.basename(p),
+                    pathToCategory.get(p)!,
+                    categoryLabel
+                  )
                 );
               }
               pathToCategory.set(p, categoryLabel);
@@ -753,18 +910,20 @@ export function activate(context: vscode.ExtensionContext) {
           const missing = [...knownPaths].filter((p) => !pathToCategory.has(p));
           if (missing.length > 0) {
             throw new Error(
-              `${missing.length} projeto(s) não aparecem em nenhuma categoria (inclua-os em alguma seção, mesmo "Uncategorized"): ${missing
-                .slice(0, 3)
-                .map((p) => path.basename(p))
-                .join(', ')}${missing.length > 3 ? '...' : ''}`
+              vscode.l10n.t(
+                '{0} project(s) do not appear in any category (add them to a section, even "Uncategorized"): {1}{2}',
+                missing.length,
+                missing.slice(0, 3).map((p) => path.basename(p)).join(', '),
+                missing.length > 3 ? '...' : ''
+              )
             );
           }
 
-          // Tudo validado — agora aplica.
+          // Everything validated — now apply.
           const freshMeta = getProjectMeta();
           const pinnedSet = new Set(pinnedPaths);
           for (const p of knownPaths) {
-            // Reseta o fixado de quem saiu de "Pinned" antes de marcar os que continuam/entraram.
+            // Unfavorite whoever left "Pinned" before marking the ones that stay/join.
             if (freshMeta[p]?.favorite && !pinnedSet.has(p)) {
               freshMeta[p] = { ...freshMeta[p], favorite: false };
             }
@@ -788,10 +947,12 @@ export function activate(context: vscode.ExtensionContext) {
           }
           await saveCategories(newCategoryOrder, UNCATEGORIZED);
           await saveProjectMeta(freshMeta);
-          treeProvider.refresh();
-          vscode.window.showInformationMessage('Listagem do Folderize atualizada.');
+          refreshAll();
+          vscode.window.showInformationMessage(vscode.l10n.t('Folderize listing updated.'));
         } catch (err) {
-          vscode.window.showErrorMessage(`JSON inválido: ${err instanceof Error ? err.message : err}`);
+          vscode.window.showErrorMessage(
+            vscode.l10n.t('Invalid JSON: {0}', err instanceof Error ? err.message : String(err))
+          );
         }
       });
       context.subscriptions.push(manageSaveListener);
@@ -808,7 +969,7 @@ export function activate(context: vscode.ExtensionContext) {
         e.affectsConfiguration('folderize.projectMeta') ||
         e.affectsConfiguration('folderize.excludedPaths')
       ) {
-        treeProvider.refresh();
+        refreshAll();
       }
     }),
 

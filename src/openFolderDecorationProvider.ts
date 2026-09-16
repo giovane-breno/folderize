@@ -16,7 +16,7 @@ export class OpenFolderDecorationProvider implements vscode.FileDecorationProvid
     if (uri.authority === 'missing') {
       return {
         color: new vscode.ThemeColor('disabledForeground'),
-        tooltip: 'Não encontrado no disco',
+        tooltip: vscode.l10n.t('Not found on disk'),
       };
     }
     return {

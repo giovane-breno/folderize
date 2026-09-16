@@ -37,7 +37,7 @@ Right-click a project to pin, rename, remove, or open it in a new window. Drag p
 Use the Command Palette and run:
 
 ```text
-Folderize: Buscar e abrir projeto
+Folderize: Search and open project
 ```
 
 You can also use the Folderize status bar action to search your projects quickly.
@@ -68,4 +68,4 @@ If you find a problem or have an idea for improvement, please open an issue in t
 
 ## License
 
-License information will be added before the first public release.
+[MIT](LICENSE)

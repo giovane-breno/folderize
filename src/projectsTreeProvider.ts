@@ -11,8 +11,7 @@ import {
 import { OPEN_FOLDER_COLOR_ID } from './theme';
 
 export const UNCATEGORIZED = '__uncategorized__';
-export const PINNED = '__pinned__';
-const PROJECT_MIME_TYPE = 'application/vnd.code.tree.folderizeProjects';
+export const PROJECT_MIME_TYPE = 'application/vnd.code.tree.folderizeProjects';
 const CATEGORY_MIME_TYPE = 'application/vnd.code.tree.folderizeCategories';
 
 export function getOrderedCategoryIds(usedCategories: Set<string>): string[] {
@@ -38,9 +37,8 @@ export class CategoryTreeItem extends vscode.TreeItem {
     containsOpenProject: boolean
   ) {
     super(`${label} (${count})`, vscode.TreeItemCollapsibleState.Expanded);
-    this.contextValue =
-      categoryId === UNCATEGORIZED ? 'uncategorized' : categoryId === PINNED ? 'pinnedCategory' : 'category';
-    this.iconPath = new vscode.ThemeIcon(categoryId === PINNED ? 'pinned' : 'folder-opened');
+    this.contextValue = categoryId === UNCATEGORIZED ? 'uncategorized' : 'category';
+    this.iconPath = new vscode.ThemeIcon('folder-opened');
     if (containsOpenProject) {
       this.resourceUri = vscode.Uri.from({ scheme: 'folderize', path: `category:${categoryId}` });
     }
@@ -68,22 +66,27 @@ export class ProjectTreeItem extends vscode.TreeItem {
       exists && (vscode.workspace.workspaceFolders ?? []).some((f) => f.uri.fsPath === fullPath);
 
     if (!exists) {
-      this.tooltip = `${fullPath} (não encontrado no disco)`;
+      this.tooltip = `${fullPath} (${vscode.l10n.t('not found on disk')})`;
       this.iconPath = new vscode.ThemeIcon('warning');
       this.resourceUri = vscode.Uri.from({ scheme: 'folderize', authority: 'missing', path: fullPath });
     } else {
-      this.tooltip = isOpen ? `${fullPath} (aberto nesta janela)` : fullPath;
+      this.tooltip = isOpen ? `${fullPath} (${vscode.l10n.t('open in this window')})` : fullPath;
       this.iconPath = isOpen
         ? new vscode.ThemeIcon('folder-active', new vscode.ThemeColor(OPEN_FOLDER_COLOR_ID))
         : new vscode.ThemeIcon(showPinIcon ? 'pinned' : 'folder');
       if (isOpen) {
         this.resourceUri = vscode.Uri.from({ scheme: 'folderize', path: fullPath });
       }
+
+      const branch = getGitBranch(fullPath);
+      if (branch) {
+        this.description = branch;
+      }
     }
 
     this.command = {
       command: 'folderize.openProject',
-      title: 'Abrir projeto',
+      title: vscode.l10n.t('Open project'),
       arguments: [this],
     };
   }
@@ -125,17 +128,11 @@ export class ProjectsTreeProvider
 
     const items: FolderizeTreeItem[] = [];
 
-    const pinnedCount = allProjects.filter((p) => meta[p.fullPath]?.favorite).length;
-    if (pinnedCount > 0) {
-      const pinnedHasOpen = allProjects.some((p) => meta[p.fullPath]?.favorite && openPaths.has(p.fullPath));
-      items.push(new CategoryTreeItem(PINNED, 'Fixados', pinnedCount, pinnedHasOpen));
-    }
-
     for (const id of orderedIds) {
       if (id === UNCATEGORIZED) {
         const uncategorized = allProjects
           .filter((p) => !meta[p.fullPath]?.category)
-          .sort((a, b) => compareByFavoriteThenOrder(meta, a.fullPath, b.fullPath))
+          .sort((a, b) => compareByOrder(meta, a.fullPath, b.fullPath))
           .map(
             (p) =>
               new ProjectTreeItem(p.label, p.fullPath, UNCATEGORIZED, !!meta[p.fullPath]?.favorite, false)
@@ -154,21 +151,11 @@ export class ProjectsTreeProvider
   private getProjectsForCategory(categoryId: string): ProjectTreeItem[] {
     const meta = getProjectMeta();
 
-    if (categoryId === PINNED) {
-      return listProjects()
-        .filter((p) => meta[p.fullPath]?.favorite)
-        .sort((a, b) => (meta[a.fullPath]?.order ?? 0) - (meta[b.fullPath]?.order ?? 0))
-        .map(
-          (p) =>
-            new ProjectTreeItem(p.label, p.fullPath, meta[p.fullPath]?.category ?? UNCATEGORIZED, true, true)
-        );
-    }
-
     const filtered = listProjects().filter(
       (p) => (meta[p.fullPath]?.category ?? UNCATEGORIZED) === categoryId
     );
 
-    filtered.sort((a, b) => compareByFavoriteThenOrder(meta, a.fullPath, b.fullPath));
+    filtered.sort((a, b) => compareByOrder(meta, a.fullPath, b.fullPath));
     return filtered.map(
       (p) => new ProjectTreeItem(p.label, p.fullPath, categoryId, !!meta[p.fullPath]?.favorite, false)
     );
@@ -184,7 +171,6 @@ export class ProjectsTreeProvider
 
     const categoryIds = source
       .filter((item): item is CategoryTreeItem => item instanceof CategoryTreeItem)
-      .filter((item) => item.categoryId !== PINNED)
       .map((item) => item.categoryId);
     if (categoryIds.length > 0) {
       dataTransfer.set(CATEGORY_MIME_TYPE, new vscode.DataTransferItem(categoryIds));
@@ -264,18 +250,9 @@ export class ProjectsTreeProvider
 
     const meta = getProjectMeta();
 
-    if (targetCategoryId === PINNED) {
-      for (const p of draggedPaths) {
-        meta[p] = { ...meta[p], favorite: true };
-      }
-      await saveMeta(meta);
-      this.refresh();
-      return;
-    }
-
     const allInCategory = listProjects()
       .filter((p) => (meta[p.fullPath]?.category ?? UNCATEGORIZED) === targetCategoryId)
-      .sort((a, b) => compareByFavoriteThenOrder(meta, a.fullPath, b.fullPath))
+      .sort((a, b) => compareByOrder(meta, a.fullPath, b.fullPath))
       .map((p) => p.fullPath);
 
     const draggedOriginalIndex = allInCategory.indexOf(draggedPaths[0]);
@@ -313,11 +290,26 @@ async function saveMeta(meta: ReturnType<typeof getProjectMeta>): Promise<void> 
     .update('projectMeta', meta, vscode.ConfigurationTarget.Global);
 }
 
-function compareByFavoriteThenOrder(meta: ProjectMeta, pathA: string, pathB: string): number {
-  const favA = meta[pathA]?.favorite ? 1 : 0;
-  const favB = meta[pathB]?.favorite ? 1 : 0;
-  if (favA !== favB) {
-    return favB - favA;
-  }
+// Favorite status only controls membership in the Favorites view — it must not
+// reorder projects within the main Projects tree.
+function compareByOrder(meta: ProjectMeta, pathA: string, pathB: string): number {
   return (meta[pathA]?.order ?? 0) - (meta[pathB]?.order ?? 0);
+}
+
+function getGitBranch(projectPath: string): string | undefined {
+  try {
+    const headPath = `${projectPath}/.git/HEAD`;
+    if (!fs.existsSync(headPath)) {
+      return undefined;
+    }
+    const content = fs.readFileSync(headPath, 'utf8').trim();
+    const match = content.match(/^ref:\s*refs\/heads\/(.+)$/);
+    if (match) {
+      return match[1];
+    }
+    // HEAD "solto" (detached): mostra os 7 primeiros caracteres do commit.
+    return content.length >= 7 ? content.slice(0, 7) : undefined;
+  } catch {
+    return undefined;
+  }
 }

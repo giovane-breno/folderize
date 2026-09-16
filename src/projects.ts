@@ -11,6 +11,7 @@ export interface ProjectMetaEntry {
   category?: string;
   order?: number;
   favorite?: boolean;
+  favoriteOrder?: number;
   displayName?: string;
 }
 export type ProjectMeta = Record<string, ProjectMetaEntry>;

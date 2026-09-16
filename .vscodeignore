@@ -11,6 +11,8 @@ src/**
 dist/**/*.map
 esbuild.js
 tsconfig.json
+media/*.svg
+media/icon-original.png
 package-lock.json
 .gitignore
 .vscodeignore

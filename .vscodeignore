@@ -1,0 +1,16 @@
+.git/**
+.github/**
+.vscode/**
+.agents/**
+.codex/**
+node_modules/**
+src/**
+*.vsix
+*.map
+**/*.map
+dist/**/*.map
+esbuild.js
+tsconfig.json
+package-lock.json
+.gitignore
+.vscodeignore

@@ -1,0 +1,280 @@
+{
+  "name": "folderize",
+  "displayName": "Folderize",
+  "description": "%folderize.description%",
+  "version": "0.0.4",
+  "publisher": "your-publisher-id",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/giovane-breno/folderize"
+  },
+  "bugs": {
+    "url": "https://github.com/giovane-breno/folderize/issues"
+  },
+  "homepage": "https://github.com/giovane-breno/folderize#readme",
+  "qna": "marketplace",
+  "l10n": "./l10n",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "colors": [
+      {
+        "id": "folderize.openFolderForeground",
+        "description": "%folderize.color.openFolderForeground%",
+        "defaults": {
+          "dark": "#009936",
+          "light": "#00994D"
+        }
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "folderize",
+          "title": "Folderize",
+          "icon": "$(folder-library)"
+        }
+      ]
+    },
+    "views": {
+      "folderize": [
+        {
+          "id": "folderize.projectsView",
+          "name": "%folderize.view.projects%",
+          "showCollapseAll": true
+        },
+        {
+          "id": "folderize.helpView",
+          "name": "%folderize.view.aboutUs%",
+          "visibility": "collapsed"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "folderize.projectsView",
+        "contents": "%folderize.viewsWelcome.projects%"
+      }
+    ],
+    "commands": [
+      {
+        "command": "folderize.quickOpen",
+        "title": "%folderize.command.quickOpen%"
+      },
+      {
+        "command": "folderize.showVersion",
+        "title": "%folderize.command.showVersion%"
+      },
+      {
+        "command": "folderize.openGithub",
+        "title": "%folderize.command.openGithub%"
+      },
+      {
+        "command": "folderize.reportIssue",
+        "title": "%folderize.command.reportIssue%"
+      },
+      {
+        "command": "folderize.starRepo",
+        "title": "%folderize.command.starRepo%"
+      },
+      {
+        "command": "folderize.refresh",
+        "title": "%folderize.command.refresh%",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "folderize.add",
+        "title": "%folderize.command.add%",
+        "icon": "$(add)"
+      },
+      {
+        "command": "folderize.addRootFolder",
+        "title": "%folderize.command.addRootFolder%"
+      },
+      {
+        "command": "folderize.addProject",
+        "title": "%folderize.command.addProject%"
+      },
+      {
+        "command": "folderize.addCurrentFolder",
+        "title": "%folderize.command.addCurrentFolder%"
+      },
+      {
+        "command": "folderize.openProjectInNewWindow",
+        "title": "%folderize.command.openProjectInNewWindow%"
+      },
+      {
+        "command": "folderize.manage",
+        "title": "%folderize.command.manage%"
+      },
+      {
+        "command": "folderize.adjustOrder",
+        "title": "%folderize.command.adjustOrder%"
+      },
+      {
+        "command": "folderize.addCategory",
+        "title": "%folderize.command.addCategory%",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "folderize.renameCategory",
+        "title": "%folderize.command.renameCategory%"
+      },
+      {
+        "command": "folderize.removeCategory",
+        "title": "%folderize.command.removeCategory%"
+      },
+      {
+        "command": "folderize.openProject",
+        "title": "%folderize.command.openProject%"
+      },
+      {
+        "command": "folderize.renameProject",
+        "title": "%folderize.command.renameProject%"
+      },
+      {
+        "command": "folderize.removeProject",
+        "title": "%folderize.command.removeProject%"
+      },
+      {
+        "command": "folderize.toggleFavorite",
+        "title": "%folderize.command.toggleFavorite%"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "folderize.add",
+          "when": "view == folderize.projectsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "folderize.addCategory",
+          "when": "view == folderize.projectsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "folderize.refresh",
+          "when": "view == folderize.projectsView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "folderize.adjustOrder",
+          "when": "view == folderize.projectsView",
+          "group": "1_manage@1"
+        },
+        {
+          "command": "folderize.manage",
+          "when": "view == folderize.projectsView",
+          "group": "1_manage@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "folderize.openProject",
+          "when": "view == folderize.projectsView && (viewItem == project || viewItem == projectFavorite)",
+          "group": "1_open@1"
+        },
+        {
+          "command": "folderize.openProjectInNewWindow",
+          "when": "view == folderize.projectsView && (viewItem == project || viewItem == projectFavorite)",
+          "group": "1_open@2"
+        },
+        {
+          "command": "folderize.toggleFavorite",
+          "when": "view == folderize.projectsView && (viewItem == project || viewItem == projectFavorite)",
+          "group": "2_edit@1"
+        },
+        {
+          "command": "folderize.renameProject",
+          "when": "view == folderize.projectsView && (viewItem == project || viewItem == projectFavorite)",
+          "group": "2_edit@2"
+        },
+        {
+          "command": "folderize.removeProject",
+          "when": "view == folderize.projectsView && (viewItem == project || viewItem == projectFavorite || viewItem == projectMissing)",
+          "group": "3_remove"
+        },
+        {
+          "command": "folderize.renameCategory",
+          "when": "view == folderize.projectsView && viewItem == category",
+          "group": "2_edit"
+        },
+        {
+          "command": "folderize.removeCategory",
+          "when": "view == folderize.projectsView && viewItem == category",
+          "group": "3_remove"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Folderize",
+      "properties": {
+        "folderize.rootFolders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "%folderize.config.rootFolders%"
+        },
+        "folderize.projects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "%folderize.config.projects%"
+        },
+        "folderize.categories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "%folderize.config.categories%"
+        },
+        "folderize.uncategorizedPosition": {
+          "type": "number",
+          "default": -1,
+          "description": "%folderize.config.uncategorizedPosition%"
+        },
+        "folderize.projectMeta": {
+          "type": "object",
+          "default": {},
+          "description": "%folderize.config.projectMeta%"
+        },
+        "folderize.excludedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "%folderize.config.excludedPaths%"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "compile": "tsc --noEmit -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^2.32.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0"
+  }
+}

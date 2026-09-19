@@ -7,8 +7,10 @@ import {
   listProjects,
   ProjectMeta,
   saveCategories,
+  saveProjectMeta,
 } from './projects';
 import { OPEN_FOLDER_COLOR_ID } from './theme';
+import { hasDockerCompose, isDockerAvailable, isDockerRunning } from './docker';
 
 export const UNCATEGORIZED = '__uncategorized__';
 export const PROJECT_MIME_TYPE = 'application/vnd.code.tree.folderizeProjects';
@@ -40,7 +42,7 @@ export class CategoryTreeItem extends vscode.TreeItem {
     this.contextValue = categoryId === UNCATEGORIZED ? 'uncategorized' : 'category';
     this.iconPath = new vscode.ThemeIcon('folder-opened');
     if (containsOpenProject) {
-      this.resourceUri = vscode.Uri.from({ scheme: 'folderize', path: `category:${categoryId}` });
+      this.resourceUri = vscode.Uri.from({ scheme: 'folderize', path: `category:${categoryId}`, query: 'open' });
     }
   }
 }
@@ -50,17 +52,24 @@ export class ProjectTreeItem extends vscode.TreeItem {
     public readonly label: string,
     public readonly fullPath: string,
     public readonly categoryId: string,
-    isFavorite: boolean,
-    showPinIcon: boolean = isFavorite
+    public readonly isFavorite: boolean,
+    showPinIcon: boolean = isFavorite,
+    lastOpenedAt?: number
   ) {
     super(label, vscode.TreeItemCollapsibleState.None);
 
     const exists = fs.existsSync(fullPath);
-    this.contextValue = !exists
-      ? 'projectMissing'
-      : isFavorite
-      ? 'projectFavorite'
-      : 'project';
+    const hasCompose = exists && hasDockerCompose(fullPath);
+    const dockerUnavailable = hasCompose && !isDockerAvailable();
+    const baseContextValue = !exists ? 'projectMissing' : isFavorite ? 'projectFavorite' : 'project';
+    const dockerSuffix = !hasCompose
+      ? ''
+      : dockerUnavailable
+      ? ' docker-unavailable'
+      : isDockerRunning(fullPath)
+      ? ' docker-running'
+      : ' docker-stopped';
+    this.contextValue = baseContextValue + dockerSuffix;
 
     const isOpen =
       exists && (vscode.workspace.workspaceFolders ?? []).some((f) => f.uri.fsPath === fullPath);
@@ -70,18 +79,26 @@ export class ProjectTreeItem extends vscode.TreeItem {
       this.iconPath = new vscode.ThemeIcon('warning');
       this.resourceUri = vscode.Uri.from({ scheme: 'folderize', authority: 'missing', path: fullPath });
     } else {
-      this.tooltip = isOpen ? `${fullPath} (${vscode.l10n.t('open in this window')})` : fullPath;
+      let tooltip = isOpen ? `${fullPath} (${vscode.l10n.t('open in this window')})` : fullPath;
+      if (lastOpenedAt) {
+        const exact = new Date(lastOpenedAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+        tooltip += `\n${vscode.l10n.t('Last opened: {0}', exact)}`;
+      }
+      this.tooltip = tooltip;
       this.iconPath = isOpen
         ? new vscode.ThemeIcon('folder-active', new vscode.ThemeColor(OPEN_FOLDER_COLOR_ID))
         : new vscode.ThemeIcon(showPinIcon ? 'pinned' : 'folder');
-      if (isOpen) {
-        this.resourceUri = vscode.Uri.from({ scheme: 'folderize', path: fullPath });
+
+      const flags = [isOpen && 'open', hasCompose && (dockerUnavailable ? 'docker-unavailable' : 'docker')]
+        .filter(Boolean)
+        .join('&');
+      if (flags) {
+        this.resourceUri = vscode.Uri.from({ scheme: 'folderize', path: fullPath, query: flags });
       }
 
       const branch = getGitBranch(fullPath);
-      if (branch) {
-        this.description = branch;
-      }
+      const lastOpened = lastOpenedAt ? formatRelativeTime(lastOpenedAt) : undefined;
+      this.description = [branch, lastOpened].filter(Boolean).join(' · ') || undefined;
     }
 
     this.command = {
@@ -97,7 +114,7 @@ type FolderizeTreeItem = CategoryTreeItem | ProjectTreeItem;
 export class ProjectsTreeProvider
   implements vscode.TreeDataProvider<FolderizeTreeItem>, vscode.TreeDragAndDropController<FolderizeTreeItem>
 {
-  readonly dropMimeTypes = [PROJECT_MIME_TYPE, CATEGORY_MIME_TYPE];
+  readonly dropMimeTypes = [PROJECT_MIME_TYPE, CATEGORY_MIME_TYPE, 'text/uri-list'];
   readonly dragMimeTypes = [PROJECT_MIME_TYPE, CATEGORY_MIME_TYPE];
 
   private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<void>();
@@ -187,6 +204,43 @@ export class ProjectsTreeProvider
     const projectTransfer = dataTransfer.get(PROJECT_MIME_TYPE);
     if (projectTransfer) {
       await this.handleProjectDrop(target, projectTransfer.value);
+      return;
+    }
+
+    const uriListTransfer = dataTransfer.get('text/uri-list');
+    if (uriListTransfer) {
+      await this.handleExternalDrop(uriListTransfer);
+    }
+  }
+
+  // Dragging a folder in from the OS Explorer view (or the system file manager)
+  // delivers it as a standard 'text/uri-list' payload rather than our internal
+  // MIME types — hand the paths off to the command that decides project vs. root.
+  private async handleExternalDrop(item: vscode.DataTransferItem): Promise<void> {
+    const raw = await item.asString();
+    const paths = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'))
+      .map((line) => {
+        try {
+          return vscode.Uri.parse(line);
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((uri): uri is vscode.Uri => !!uri && uri.scheme === 'file')
+      .map((uri) => uri.fsPath)
+      .filter((fsPath) => {
+        try {
+          return fs.statSync(fsPath).isDirectory();
+        } catch {
+          return false;
+        }
+      });
+
+    if (paths.length > 0) {
+      await vscode.commands.executeCommand('folderize.addDroppedPaths', paths);
     }
   }
 
@@ -279,15 +333,9 @@ export class ProjectsTreeProvider
       };
     });
 
-    await saveMeta(meta);
+    await saveProjectMeta(meta);
     this.refresh();
   }
-}
-
-async function saveMeta(meta: ReturnType<typeof getProjectMeta>): Promise<void> {
-  await vscode.workspace
-    .getConfiguration('folderize')
-    .update('projectMeta', meta, vscode.ConfigurationTarget.Global);
 }
 
 // Favorite status only controls membership in the Favorites view — it must not
@@ -296,20 +344,68 @@ function compareByOrder(meta: ProjectMeta, pathA: string, pathB: string): number
   return (meta[pathA]?.order ?? 0) - (meta[pathB]?.order ?? 0);
 }
 
+// Re-reading and re-parsing .git/HEAD on every tree render (every project, every
+// view) is wasted work when the branch hasn't changed since the last render — a
+// cheap `stat` to compare mtime is enough to tell, so the read+regex only happens
+// when the file actually changed.
+const gitBranchCache = new Map<string, { mtimeMs: number; branch: string | undefined }>();
+
 function getGitBranch(projectPath: string): string | undefined {
+  const headPath = `${projectPath}/.git/HEAD`;
+  let mtimeMs: number;
   try {
-    const headPath = `${projectPath}/.git/HEAD`;
-    if (!fs.existsSync(headPath)) {
-      return undefined;
-    }
-    const content = fs.readFileSync(headPath, 'utf8').trim();
-    const match = content.match(/^ref:\s*refs\/heads\/(.+)$/);
-    if (match) {
-      return match[1];
-    }
-    // HEAD "solto" (detached): mostra os 7 primeiros caracteres do commit.
-    return content.length >= 7 ? content.slice(0, 7) : undefined;
+    mtimeMs = fs.statSync(headPath).mtimeMs;
   } catch {
+    gitBranchCache.delete(projectPath);
     return undefined;
   }
+
+  const cached = gitBranchCache.get(projectPath);
+  if (cached && cached.mtimeMs === mtimeMs) {
+    return cached.branch;
+  }
+
+  let branch: string | undefined;
+  try {
+    const content = fs.readFileSync(headPath, 'utf8').trim();
+    const match = content.match(/^ref:\s*refs\/heads\/(.+)$/);
+    // HEAD "solto" (detached): mostra os 7 primeiros caracteres do commit.
+    branch = match ? match[1] : content.length >= 7 ? content.slice(0, 7) : undefined;
+  } catch {
+    branch = undefined;
+  }
+
+  gitBranchCache.set(projectPath, { mtimeMs, branch });
+  return branch;
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const now = new Date();
+  const then = new Date(timestamp);
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const dayDiff = Math.round((startOfDay(now) - startOfDay(then)) / 86400000);
+  const time = then.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+
+  if (dayDiff <= 0) {
+    return vscode.l10n.t('Today, {0}', time);
+  }
+  if (dayDiff === 1) {
+    return vscode.l10n.t('Yesterday, {0}', time);
+  }
+  if (dayDiff < 7) {
+    return vscode.l10n.t('{0} days ago', dayDiff);
+  }
+
+  const weekDiff = Math.round(dayDiff / 7);
+  if (dayDiff < 30) {
+    return weekDiff === 1 ? vscode.l10n.t('1 week ago') : vscode.l10n.t('{0} weeks ago', weekDiff);
+  }
+
+  const monthDiff = Math.round(dayDiff / 30);
+  if (dayDiff < 365) {
+    return monthDiff === 1 ? vscode.l10n.t('1 month ago') : vscode.l10n.t('{0} months ago', monthDiff);
+  }
+
+  const yearDiff = Math.round(dayDiff / 365);
+  return yearDiff === 1 ? vscode.l10n.t('1 year ago') : vscode.l10n.t('{0} years ago', yearDiff);
 }

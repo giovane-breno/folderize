@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { getProjectMeta, listProjects } from './projects';
+import { getProjectMeta, listProjects, saveProjectMeta } from './projects';
 import { PROJECT_MIME_TYPE, ProjectTreeItem, UNCATEGORIZED } from './projectsTreeProvider';
 
 export class FavoritesViewProvider
@@ -73,9 +73,7 @@ export class FavoritesViewProvider
       meta[p] = { ...meta[p], favorite: true, favoriteOrder: idx };
     });
 
-    await vscode.workspace
-      .getConfiguration('folderize')
-      .update('projectMeta', meta, vscode.ConfigurationTarget.Global);
+    await saveProjectMeta(meta);
     this.refresh();
   }
 }

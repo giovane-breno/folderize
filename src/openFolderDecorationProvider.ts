@@ -19,8 +19,23 @@ export class OpenFolderDecorationProvider implements vscode.FileDecorationProvid
         tooltip: vscode.l10n.t('Not found on disk'),
       };
     }
+
+    const flags = new Set(uri.query.split('&').filter(Boolean));
+    const isOpen = flags.has('open');
+    const hasDocker = flags.has('docker');
+    const dockerUnavailable = flags.has('docker-unavailable');
+    if (!isOpen && !hasDocker && !dockerUnavailable) {
+      return undefined;
+    }
+
     return {
-      color: new vscode.ThemeColor(OPEN_FOLDER_COLOR_ID),
+      color: isOpen
+        ? new vscode.ThemeColor(OPEN_FOLDER_COLOR_ID)
+        : dockerUnavailable
+        ? new vscode.ThemeColor('disabledForeground')
+        : undefined,
+      badge: hasDocker || dockerUnavailable ? 'D' : undefined,
+      tooltip: dockerUnavailable ? vscode.l10n.t('Docker (unavailable)') : hasDocker ? vscode.l10n.t('Docker') : undefined,
     };
   }
 }

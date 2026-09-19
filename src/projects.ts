@@ -76,16 +76,33 @@ function listSubfolders(root: string): Project[] {
   return result;
 }
 
+// getProjectMeta() is called several times per tree refresh across every view.
+// Re-fetching from config and deep-cloning it each time was the dominant cost of
+// a refresh with many projects, so the parsed clone is cached and only rebuilt
+// when the underlying config actually changes (see saveProjectMeta and the
+// `onDidChangeConfiguration` listener wired up in extension.ts).
+let metaCache: ProjectMeta | undefined;
+
+export function invalidateProjectMetaCache(): void {
+  metaCache = undefined;
+}
+
 export function getProjectMeta(): ProjectMeta {
-  const raw = vscode.workspace.getConfiguration('folderize').get<ProjectMeta>('projectMeta', {});
-  // O VS Code retorna um objeto congelado (proxy); clonamos pra poder mutar livremente.
-  return JSON.parse(JSON.stringify(raw));
+  if (!metaCache) {
+    const raw = vscode.workspace.getConfiguration('folderize').get<ProjectMeta>('projectMeta', {});
+    // O VS Code retorna um objeto congelado (proxy); clonamos pra poder mutar livremente.
+    metaCache = JSON.parse(JSON.stringify(raw));
+  }
+  // Each caller gets its own independent copy so mutating the result (a common
+  // pattern in this codebase before calling saveProjectMeta) can't corrupt the cache.
+  return structuredClone(metaCache!);
 }
 
 export async function saveProjectMeta(meta: ProjectMeta): Promise<void> {
   await vscode.workspace
     .getConfiguration('folderize')
     .update('projectMeta', meta, vscode.ConfigurationTarget.Global);
+  invalidateProjectMetaCache();
 }
 
 export async function updateProjectMeta(
@@ -198,6 +215,27 @@ export async function removeProjectEverywhere(fullPath: string): Promise<void> {
 export function isFromScannedRootFolder(fullPath: string): boolean {
   const rootFolders = vscode.workspace.getConfiguration('folderize').get<string[]>('rootFolders', []);
   return rootFolders.some((root) => path.resolve(path.dirname(fullPath)) === path.resolve(root));
+}
+
+/**
+ * Caminhos que aparecem tanto numa pasta raiz escaneada quanto na lista de
+ * projetos adicionados manualmente. `listProjects()` já desduplica isso na
+ * exibição (a entrada manual vence), mas a configuração fica redundante —
+ * removendo da lista manual, o projeto continua aparecendo via a pasta raiz.
+ */
+export function getDuplicateProjectPaths(): string[] {
+  const config = vscode.workspace.getConfiguration('folderize');
+  const rootFolders = config.get<string[]>('rootFolders', []);
+  const explicitProjects = config.get<string[]>('projects', []);
+
+  const scannedPaths = new Set<string>();
+  for (const root of rootFolders) {
+    for (const project of listSubfolders(root)) {
+      scannedPaths.add(project.fullPath);
+    }
+  }
+
+  return explicitProjects.filter((p) => scannedPaths.has(p));
 }
 
 export async function unexcludePath(fullPath: string): Promise<void> {

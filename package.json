@@ -2,7 +2,7 @@
   "name": "folderize-projects",
   "displayName": "Folderizer",
   "description": "%folderize.description%",
-  "version": "0.0.6",
+  "version": "0.2.0",
   "publisher": "giovane-breno",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -80,6 +80,17 @@
           "visibility": "collapsed"
         },
         {
+          "id": "folderize.rootsView",
+          "name": "%folderize.view.roots%",
+          "visibility": "collapsed"
+        },
+        {
+          "id": "folderize.dockerView",
+          "name": "%folderize.view.docker%",
+          "visibility": "collapsed",
+          "when": "folderize.hasDockerCompose"
+        },
+        {
           "id": "folderize.helpView",
           "name": "%folderize.view.aboutUs%",
           "visibility": "collapsed"
@@ -94,6 +105,14 @@
       {
         "view": "folderize.recentsView",
         "contents": "%folderize.viewsWelcome.recents%"
+      },
+      {
+        "view": "folderize.rootsView",
+        "contents": "%folderize.viewsWelcome.roots%"
+      },
+      {
+        "view": "folderize.dockerView",
+        "contents": "%folderize.viewsWelcome.docker%"
       }
     ],
     "commands": [
@@ -136,6 +155,10 @@
         "title": "%folderize.command.addProject%"
       },
       {
+        "command": "folderize.addFolder",
+        "title": "%folderize.command.addFolder%"
+      },
+      {
         "command": "folderize.addCurrentFolder",
         "title": "%folderize.command.addCurrentFolder%"
       },
@@ -168,6 +191,18 @@
         "title": "%folderize.command.adjustOrder%"
       },
       {
+        "command": "folderize.exportBackup",
+        "title": "%folderize.command.exportBackup%"
+      },
+      {
+        "command": "folderize.importBackup",
+        "title": "%folderize.command.importBackup%"
+      },
+      {
+        "command": "folderize.resetAll",
+        "title": "%folderize.command.resetAll%"
+      },
+      {
         "command": "folderize.addCategory",
         "title": "%folderize.command.addCategory%",
         "icon": "$(new-folder)"
@@ -197,9 +232,78 @@
         "title": "%folderize.command.toggleFavorite%"
       },
       {
+        "command": "folderize.dockerStart",
+        "title": "%folderize.command.dockerStart%",
+        "icon": "$(play)"
+      },
+      {
+        "command": "folderize.dockerStop",
+        "title": "%folderize.command.dockerStop%",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "folderize.dockerRestart",
+        "title": "%folderize.command.dockerRestart%",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "folderize.dockerStartAll",
+        "title": "%folderize.command.dockerStartAll%",
+        "icon": "$(play)"
+      },
+      {
+        "command": "folderize.dockerPauseAll",
+        "title": "%folderize.command.dockerPauseAll%",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "folderize.dockerRestartAll",
+        "title": "%folderize.command.dockerRestartAll%",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "folderize.dockerContainerStart",
+        "title": "%folderize.command.dockerContainerStart%",
+        "icon": "$(play)"
+      },
+      {
+        "command": "folderize.dockerContainerStop",
+        "title": "%folderize.command.dockerContainerStop%",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "folderize.dockerContainerPause",
+        "title": "%folderize.command.dockerContainerPause%",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "folderize.dockerContainerUnpause",
+        "title": "%folderize.command.dockerContainerUnpause%",
+        "icon": "$(play)"
+      },
+      {
+        "command": "folderize.dockerContainerExec",
+        "title": "%folderize.command.dockerContainerExec%",
+        "icon": "$(terminal)"
+      },
+      {
         "command": "folderize.clearRecents",
         "title": "%folderize.command.clearRecents%",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "folderize.removeRootFolder",
+        "title": "%folderize.command.removeRootFolder%"
+      },
+      {
+        "command": "folderize.includeExcludedPath",
+        "title": "%folderize.command.includeExcludedPath%",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "folderize.ignoreFoundPath",
+        "title": "%folderize.command.ignoreFoundPath%",
+        "icon": "$(eye-closed)"
       }
     ],
     "menus": {
@@ -230,56 +334,136 @@
           "group": "1_manage@3"
         },
         {
+          "command": "folderize.exportBackup",
+          "when": "view == folderize.projectsView",
+          "group": "2_backup@1"
+        },
+        {
+          "command": "folderize.importBackup",
+          "when": "view == folderize.projectsView",
+          "group": "2_backup@2"
+        },
+        {
+          "command": "folderize.resetAll",
+          "when": "view == folderize.projectsView",
+          "group": "2_backup@3"
+        },
+        {
           "command": "folderize.clearRecents",
           "when": "view == folderize.recentsView",
           "group": "navigation"
+        },
+        {
+          "command": "folderize.addRootFolder",
+          "when": "view == folderize.rootsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "folderize.refresh",
+          "when": "view == folderize.rootsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "folderize.dockerStartAll",
+          "when": "view == folderize.dockerView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "folderize.dockerPauseAll",
+          "when": "view == folderize.dockerView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "folderize.dockerRestartAll",
+          "when": "view == folderize.dockerView",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
         {
           "command": "folderize.openProject",
-          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && viewItem =~ /^(project|projectFavorite)\\b/",
           "group": "1_open@1"
         },
         {
           "command": "folderize.openProjectInNewWindow",
-          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && viewItem =~ /^(project|projectFavorite)\\b/",
           "group": "1_open@2"
         },
         {
           "command": "folderize.openInTerminal",
-          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && viewItem =~ /^(project|projectFavorite)\\b/",
           "group": "1_open@3"
         },
         {
           "command": "folderize.revealInFileManager",
-          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && viewItem =~ /^(project|projectFavorite)\\b/",
           "group": "1_open@4"
         },
         {
           "command": "folderize.openProjectGithub",
-          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && viewItem =~ /^(project|projectFavorite)\\b/",
           "group": "1_open@5"
         },
         {
           "command": "folderize.copyPath",
-          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite || viewItem == projectMissing)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && viewItem =~ /^(project|projectFavorite|projectMissing)\\b/",
           "group": "1_open@6"
         },
         {
           "command": "folderize.toggleFavorite",
-          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && viewItem =~ /^(project|projectFavorite)\\b/",
           "group": "2_edit@1"
         },
         {
           "command": "folderize.renameProject",
-          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && viewItem =~ /^(project|projectFavorite)\\b/",
           "group": "2_edit@2"
         },
         {
           "command": "folderize.removeProject",
-          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && (viewItem == project || viewItem == projectFavorite || viewItem == projectMissing)",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && viewItem =~ /^(project|projectFavorite|projectMissing)\\b/",
           "group": "3_remove"
+        },
+        {
+          "command": "folderize.dockerStart",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && viewItem =~ /docker-stopped/",
+          "group": "inline"
+        },
+        {
+          "command": "folderize.dockerStop",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && viewItem =~ /docker-running/",
+          "group": "inline@1"
+        },
+        {
+          "command": "folderize.dockerRestart",
+          "when": "(view == folderize.projectsView || view == folderize.favoritesView || view == folderize.recentsView) && viewItem =~ /docker-running/",
+          "group": "inline@2"
+        },
+        {
+          "command": "folderize.dockerContainerExec",
+          "when": "view == folderize.dockerView && viewItem =~ /^container-running/",
+          "group": "inline@1"
+        },
+        {
+          "command": "folderize.dockerContainerPause",
+          "when": "view == folderize.dockerView && viewItem =~ /^container-running/",
+          "group": "inline@2"
+        },
+        {
+          "command": "folderize.dockerContainerStop",
+          "when": "view == folderize.dockerView && viewItem =~ /^container-(running|paused)/",
+          "group": "inline@3"
+        },
+        {
+          "command": "folderize.dockerContainerUnpause",
+          "when": "view == folderize.dockerView && viewItem =~ /^container-paused/",
+          "group": "inline@1"
+        },
+        {
+          "command": "folderize.dockerContainerStart",
+          "when": "view == folderize.dockerView && viewItem =~ /^container-(exited|created|dead)/",
+          "group": "inline"
         },
         {
           "command": "folderize.renameCategory",
@@ -290,6 +474,36 @@
           "command": "folderize.removeCategory",
           "when": "view == folderize.projectsView && viewItem == category",
           "group": "3_remove"
+        },
+        {
+          "command": "folderize.revealInFileManager",
+          "when": "view == folderize.rootsView && viewItem =~ /^rootFolder\\b/",
+          "group": "1_open"
+        },
+        {
+          "command": "folderize.removeRootFolder",
+          "when": "view == folderize.rootsView && viewItem =~ /^rootFolder(Missing)?\\b/",
+          "group": "3_remove"
+        },
+        {
+          "command": "folderize.includeExcludedPath",
+          "when": "view == folderize.rootsView && viewItem == ignoredPath",
+          "group": "inline"
+        },
+        {
+          "command": "folderize.includeExcludedPath",
+          "when": "view == folderize.rootsView && viewItem == ignoredPath",
+          "group": "1_open"
+        },
+        {
+          "command": "folderize.ignoreFoundPath",
+          "when": "view == folderize.rootsView && viewItem == foundPath",
+          "group": "inline"
+        },
+        {
+          "command": "folderize.ignoreFoundPath",
+          "when": "view == folderize.rootsView && viewItem == foundPath",
+          "group": "1_open"
         }
       ]
     },

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { getProjectMeta, listProjects } from './projects';
 import { ProjectTreeItem, UNCATEGORIZED } from './projectsTreeProvider';
-import { getRecentPaths } from './recents';
+import { getRecentEntries } from './recents';
 
 export class RecentsViewProvider implements vscode.TreeDataProvider<ProjectTreeItem> {
   private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<void>();
@@ -18,17 +18,21 @@ export class RecentsViewProvider implements vscode.TreeDataProvider<ProjectTreeI
   getChildren(): ProjectTreeItem[] {
     const meta = getProjectMeta();
     const byPath = new Map(listProjects().map((p) => [p.fullPath, p]));
-    return getRecentPaths()
-      .map((fullPath) => byPath.get(fullPath))
-      .filter((p): p is NonNullable<typeof p> => !!p)
+    return getRecentEntries()
+      .map((entry) => {
+        const p = byPath.get(entry.fullPath);
+        return p ? { project: p, openedAt: entry.openedAt } : undefined;
+      })
+      .filter((e): e is NonNullable<typeof e> => !!e)
       .map(
-        (p) =>
+        ({ project: p, openedAt }) =>
           new ProjectTreeItem(
             p.label,
             p.fullPath,
             meta[p.fullPath]?.category ?? UNCATEGORIZED,
             !!meta[p.fullPath]?.favorite,
-            false
+            false,
+            openedAt || undefined
           )
       );
   }

@@ -4,7 +4,9 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   getCategories,
+  getDuplicateProjectPaths,
   getProjectMeta,
+  invalidateProjectMetaCache,
   invalidateSubfolderCache,
   isFromScannedRootFolder,
   listProjects,
@@ -27,8 +29,37 @@ import { FavoritesViewProvider } from './favoritesViewProvider';
 import { HelpViewProvider } from './helpViewProvider';
 import { OpenFolderDecorationProvider } from './openFolderDecorationProvider';
 import { openReorderPanel, ReorderCategory } from './reorderPanel';
-import { clearRecents, initRecents, pruneRecents, recordRecentOpen } from './recents';
+import {
+  clearRecents,
+  getRecentEntries,
+  initRecents,
+  pruneRecents,
+  recordRecentOpen,
+  restoreRecentEntries,
+  restoreRecents,
+} from './recents';
 import { RecentsViewProvider } from './recentsViewProvider';
+import { RootChildItem, RootFolderTreeItem, RootsTreeProvider } from './rootsTreeProvider';
+import {
+  COMPOSE_FILENAMES,
+  getRunningWorkingDirs,
+  hasDockerCompose,
+  invalidateDockerComposeCache,
+  isDockerRunning,
+  normalizeProjectPath,
+  pauseCompose,
+  pauseContainer,
+  refreshDockerState,
+  restartCompose,
+  startCompose,
+  startContainer,
+  stopCompose,
+  stopContainer,
+  unpauseContainer,
+} from './docker';
+import { DockerContainerTreeItem, DockerContainersProvider } from './dockerViewProvider';
+
+const BACKUP_VERSION = 1;
 
 export function activate(context: vscode.ExtensionContext) {
   let manageSaveListener: vscode.Disposable | undefined;
@@ -56,11 +87,68 @@ export function activate(context: vscode.ExtensionContext) {
   });
   context.subscriptions.push(recentsView);
 
-  function refreshAll(): void {
+  const rootsProvider = new RootsTreeProvider();
+  const rootsView = vscode.window.createTreeView('folderize.rootsView', {
+    treeDataProvider: rootsProvider,
+  });
+
+  // Docker view only ever shows the single project open in this window, matching
+  // the rest of the extension's "one active project per window" assumption (see
+  // stagePendingDockerSwitch below).
+  function currentProjectPath(): string | undefined {
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+
+  const dockerProvider = new DockerContainersProvider(currentProjectPath);
+  const dockerView = vscode.window.createTreeView('folderize.dockerView', {
+    treeDataProvider: dockerProvider,
+  });
+  context.subscriptions.push(dockerView);
+
+  function updateDockerViewContext(): void {
+    const projectPath = currentProjectPath();
+    vscode.commands.executeCommand(
+      'setContext',
+      'folderize.hasDockerCompose',
+      !!projectPath && hasDockerCompose(projectPath)
+    );
+  }
+  updateDockerViewContext();
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
+    updateDockerViewContext();
+    dockerProvider.refresh();
+  }));
+
+  function refreshAllNow(): void {
     treeProvider.refresh();
     favoritesProvider.refresh();
     recentsProvider.refresh();
+    rootsProvider.refresh();
+    dockerProvider.refresh();
   }
+
+  // refreshAll() is called from many places (folder watchers, the docker poll,
+  // config changes, most commands) and bursts of these can fire within
+  // milliseconds of each other — e.g. a folder watcher's create+delete pair, or
+  // several config keys changing from one settings write. Debouncing collapses
+  // a burst into a single tree rebuild instead of rebuilding once per event.
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  function refreshAll(): void {
+    if (refreshTimer) {
+      clearTimeout(refreshTimer);
+    }
+    refreshTimer = setTimeout(() => {
+      refreshTimer = undefined;
+      refreshAllNow();
+    }, 150);
+  }
+  context.subscriptions.push({
+    dispose: () => {
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+    },
+  });
 
   const decorationProvider = new OpenFolderDecorationProvider();
   context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorationProvider));
@@ -97,6 +185,19 @@ export function activate(context: vscode.ExtensionContext) {
   updateRecentsDescription();
   context.subscriptions.push(recentsProvider.onDidChangeTreeData(() => updateRecentsDescription()));
 
+  function updateRootsDescription(): void {
+    const count = rootsProvider.getRootFolders().length;
+    rootsView.description = count > 0 ? String(count) : undefined;
+  }
+  updateRootsDescription();
+  context.subscriptions.push(rootsProvider.onDidChangeTreeData(() => updateRootsDescription()));
+
+  // Container filenames are matched a level below each root (root/<project>/<file>),
+  // since projects live one level under a root folder — see listSubfolders() in
+  // projects.ts. A plain (non-`**`) RelativePattern stays non-recursive, so this
+  // doesn't turn into a full recursive watch of the whole root tree.
+  const composeGlob = `*/{${COMPOSE_FILENAMES.join(',')}}`;
+
   let folderWatchers: vscode.Disposable[] = [];
   function setupFolderWatchers(): void {
     folderWatchers.forEach((w) => w.dispose());
@@ -104,9 +205,20 @@ export function activate(context: vscode.ExtensionContext) {
 
     const roots = vscode.workspace.getConfiguration('folderize').get<string[]>('rootFolders', []);
     for (const root of roots) {
+      const composeWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, composeGlob));
+      const invalidateComposeForFile = (uri: vscode.Uri) => {
+        invalidateDockerComposeCache(path.dirname(uri.fsPath));
+        refreshAll();
+      };
+      composeWatcher.onDidCreate(invalidateComposeForFile);
+      composeWatcher.onDidDelete(invalidateComposeForFile);
+      folderWatchers.push(composeWatcher);
+      context.subscriptions.push(composeWatcher);
+
       const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '*'));
       watcher.onDidCreate(async (uri) => {
         invalidateSubfolderCache(root);
+        invalidateDockerComposeCache(uri.fsPath);
         const name = path.basename(uri.fsPath);
         let isRealDirectory = false;
         if (!name.startsWith('.')) {
@@ -142,8 +254,9 @@ export function activate(context: vscode.ExtensionContext) {
         }
         refreshAll();
       });
-      watcher.onDidDelete(() => {
+      watcher.onDidDelete((uri) => {
         invalidateSubfolderCache(root);
+        invalidateDockerComposeCache(uri.fsPath);
         refreshAll();
       });
       folderWatchers.push(watcher);
@@ -151,6 +264,45 @@ export function activate(context: vscode.ExtensionContext) {
     }
   }
   setupFolderWatchers();
+
+  // Projects added individually (folderize.projects) rather than discovered under
+  // a root folder need their own watcher, since they aren't covered by any
+  // root's composeGlob watcher above.
+  let projectComposeWatchers: vscode.Disposable[] = [];
+  function setupProjectComposeWatchers(): void {
+    projectComposeWatchers.forEach((w) => w.dispose());
+    projectComposeWatchers = [];
+
+    const explicitProjects = vscode.workspace.getConfiguration('folderize').get<string[]>('projects', []);
+    for (const projectPath of explicitProjects) {
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(projectPath, `{${COMPOSE_FILENAMES.join(',')}}`)
+      );
+      const invalidateAndRefresh = () => {
+        invalidateDockerComposeCache(projectPath);
+        refreshAll();
+      };
+      watcher.onDidCreate(invalidateAndRefresh);
+      watcher.onDidDelete(invalidateAndRefresh);
+      projectComposeWatchers.push(watcher);
+      context.subscriptions.push(watcher);
+    }
+  }
+  setupProjectComposeWatchers();
+
+  async function pollDockerState(): Promise<void> {
+    const changed = await refreshDockerState();
+    if (changed) {
+      refreshAll();
+    }
+    // Container-level state (paused/exited/restarting) can change without
+    // flipping the running-working-dir set that refreshDockerState() tracks, so
+    // the containers view refreshes independently of the `changed` flag above.
+    dockerProvider.refresh();
+  }
+  pollDockerState();
+  const dockerPollInterval = setInterval(pollDockerState, 7000);
+  context.subscriptions.push({ dispose: () => clearInterval(dockerPollInterval) });
 
   async function addRootFolderPath(newPath: string): Promise<void> {
     const subfolderPaths = getSubfolderPaths(newPath);
@@ -215,6 +367,39 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.showInformationMessage(vscode.l10n.t('Project added: {0}.', path.basename(newPath)));
   }
 
+  // Decides whether a folder (picked manually or dropped from Explorer) should be
+  // added as a single project or as a root folder (its subfolders listed as
+  // projects), asking only when it's genuinely ambiguous — the same heuristic
+  // "Add project" already used before drag-and-drop existed.
+  async function smartAddPath(newPath: string): Promise<void> {
+    if (!looksLikeProject(newPath)) {
+      const subfolderCount = countSubfolders(newPath);
+      const subprojectCount = countSubfoldersLookingLikeProjects(newPath);
+      if (subfolderCount >= 2 && subprojectCount >= 2) {
+        const addAsRoot = vscode.l10n.t('Add as root folder');
+        const continueAsProject = vscode.l10n.t('Continue as project');
+        const choice = await vscode.window.showWarningMessage(
+          vscode.l10n.t(
+            '"{0}" looks like it contains multiple projects ({1} found), not a single project.',
+            path.basename(newPath),
+            subprojectCount
+          ),
+          addAsRoot,
+          continueAsProject
+        );
+        if (choice === addAsRoot) {
+          await addRootFolderPath(newPath);
+          return;
+        }
+        if (choice !== continueAsProject) {
+          return;
+        }
+      }
+    }
+
+    await addProjectPath(newPath);
+  }
+
   async function detectSiblingProjects(): Promise<void> {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) {
@@ -233,9 +418,11 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.workspace.getConfiguration('folderize').get<string[]>('excludedPaths', [])
     );
 
-    const candidates = getSubfolderPaths(parentDir).filter(
+    const siblingCandidates = getSubfolderPaths(parentDir).filter(
       (p) => p !== currentPath && looksLikeProject(p) && !tracked.has(p) && !excludedPaths.has(p)
     );
+    const currentIsUntracked = !tracked.has(currentPath) && !excludedPaths.has(currentPath);
+    const candidates = currentIsUntracked ? [currentPath, ...siblingCandidates] : siblingCandidates;
 
     if (candidates.length === 0) {
       return;
@@ -246,11 +433,17 @@ export function activate(context: vscode.ExtensionContext) {
     const ignore = vscode.l10n.t('Ignore');
 
     const choice = await vscode.window.showInformationMessage(
-      vscode.l10n.t(
-        'Folderize found {0} new project(s) near "{1}". Add them?',
-        candidates.length,
-        path.basename(currentPath)
-      ),
+      currentIsUntracked
+        ? vscode.l10n.t(
+            'Folderize found {0} project(s) here, including "{1}" (the one you\'re in). Add them?',
+            candidates.length,
+            path.basename(currentPath)
+          )
+        : vscode.l10n.t(
+            'Folderize found {0} new project(s) near "{1}". Add them?',
+            candidates.length,
+            path.basename(currentPath)
+          ),
       addAll,
       review,
       ignore
@@ -275,6 +468,88 @@ export function activate(context: vscode.ExtensionContext) {
       }
     } else if (choice === ignore) {
       await context.globalState.update('folderize.ignoredScanParents', [...ignoredParents, parentDir]);
+    } else {
+      return;
+    }
+
+    const monitorFolder = vscode.l10n.t('Monitor folder');
+    const monitorChoice = await vscode.window.showInformationMessage(
+      vscode.l10n.t(
+        'Folderize can monitor "{0}" to automatically detect new projects added there in the future. Enable monitoring?',
+        path.basename(parentDir)
+      ),
+      monitorFolder
+    );
+    if (monitorChoice === monitorFolder) {
+      await addRootFolderPath(parentDir);
+    }
+  }
+
+  async function detectDuplicateProjects(): Promise<void> {
+    const ignoredDuplicates = new Set(context.globalState.get<string[]>('folderize.ignoredDuplicatePaths', []));
+    const pending = getDuplicateProjectPaths().filter((p) => !ignoredDuplicates.has(p));
+    if (pending.length === 0) {
+      return;
+    }
+
+    const names = pending.map((p) => path.basename(p)).join(', ');
+    const cleanUp = vscode.l10n.t('Clean up');
+    const ignore = vscode.l10n.t('Ignore');
+    const choice = await vscode.window.showWarningMessage(
+      pending.length === 1
+        ? vscode.l10n.t(
+            '"{0}" is registered both in a root folder and as a manual project. Remove the manual entry? (it stays listed via the root folder)',
+            names
+          )
+        : vscode.l10n.t(
+            '{0} projects are registered both in a root folder and manually ({1}). Remove the manual entries? (they stay listed via the root folder)',
+            pending.length,
+            names
+          ),
+      cleanUp,
+      ignore
+    );
+
+    if (choice === cleanUp) {
+      const config = vscode.workspace.getConfiguration('folderize');
+      const explicitProjects = config.get<string[]>('projects', []);
+      await config.update(
+        'projects',
+        explicitProjects.filter((p) => !pending.includes(p)),
+        vscode.ConfigurationTarget.Global
+      );
+      refreshAll();
+    } else if (choice === ignore) {
+      await context.globalState.update('folderize.ignoredDuplicatePaths', [...ignoredDuplicates, ...pending]);
+    }
+  }
+
+  async function showOnboardingIfFirstRun(): Promise<void> {
+    const alreadyShown = context.globalState.get<boolean>('folderize.onboardingShown', false);
+    if (alreadyShown) {
+      return;
+    }
+    await context.globalState.update('folderize.onboardingShown', true);
+
+    // Someone reinstalling/updating the extension already has projects configured —
+    // onboarding is only useful for a genuinely empty, first-time setup.
+    if (listProjects().length > 0) {
+      return;
+    }
+
+    const addProject = vscode.l10n.t('Add a project');
+    const learnMore = vscode.l10n.t('Learn more');
+    const choice = await vscode.window.showInformationMessage(
+      vscode.l10n.t(
+        'Welcome to Folderize! Add your project folders to browse, organize into categories, favorite and quickly switch between them from the sidebar.'
+      ),
+      addProject,
+      learnMore
+    );
+    if (choice === addProject) {
+      vscode.commands.executeCommand('folderize.add');
+    } else if (choice === learnMore) {
+      vscode.commands.executeCommand('folderize.openGithub');
     }
   }
 
@@ -292,8 +567,128 @@ export function activate(context: vscode.ExtensionContext) {
   updateStatusBarItem();
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => updateStatusBarItem()));
 
+  // "Switch environment" — when opening a project in this window while the
+  // currently open one still has Docker running, offer to hand off: stop the
+  // old project's containers and start the new one's, so switching projects
+  // doesn't leave a forgotten environment running in the background.
+  //
+  // Opening a folder in the same window fully reloads the extension host, so
+  // this can't just show a prompt and await it before calling vscode.openFolder
+  // — the process would be torn down mid-wait. Instead, the eligibility check
+  // below runs synchronously and stashes the intent in globalState (which
+  // survives the reload); the actual prompt is shown once the new window
+  // activates, by checkPendingDockerSwitch() further down.
+  // Wraps a docker compose action with a progress spinner while it runs and a
+  // notification once it's done — so it's never ambiguous whether a start/stop
+  // that can take a while (image pulls, builds) has actually finished.
+  async function runDockerAction(
+    progressTitle: string,
+    action: () => Promise<void>,
+    successMessage: string,
+    errorMessage: (err: unknown) => string
+  ): Promise<boolean> {
+    try {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: progressTitle },
+        action
+      );
+      vscode.window.showInformationMessage(successMessage);
+      return true;
+    } catch (err) {
+      vscode.window.showErrorMessage(errorMessage(err));
+      return false;
+    } finally {
+      await refreshDockerState();
+      refreshAll();
+    }
+  }
+
+  const PENDING_DOCKER_SWITCH_KEY = 'folderize.pendingDockerSwitch';
+
+  function stagePendingDockerSwitch(newPath: string): Thenable<void> | undefined {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length !== 1) {
+      return undefined;
+    }
+    const oldPath = folders[0].uri.fsPath;
+    if (oldPath === newPath || !hasDockerCompose(oldPath) || !isDockerRunning(oldPath) || !hasDockerCompose(newPath)) {
+      return undefined;
+    }
+    return context.globalState.update(PENDING_DOCKER_SWITCH_KEY, { oldPath, newPath });
+  }
+
+  async function checkPendingDockerSwitch(): Promise<void> {
+    const pending = context.globalState.get<{ oldPath: string; newPath: string }>(PENDING_DOCKER_SWITCH_KEY);
+    if (!pending) {
+      return;
+    }
+    await context.globalState.update(PENDING_DOCKER_SWITCH_KEY, undefined);
+
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length !== 1 || folders[0].uri.fsPath !== pending.newPath) {
+      return;
+    }
+
+    await refreshDockerState();
+    if (!isDockerRunning(pending.oldPath)) {
+      return;
+    }
+
+    const oldName = path.basename(pending.oldPath);
+    const newName = path.basename(pending.newPath);
+    const yes = vscode.l10n.t('Yes, switch');
+    const ignore = vscode.l10n.t('Ignore');
+    const choice = await vscode.window.showInformationMessage(
+      vscode.l10n.t(
+        'The container for {0} is still running. Stop it and start the container for {1}?',
+        oldName,
+        newName
+      ),
+      yes,
+      ignore
+    );
+    if (choice !== yes) {
+      return;
+    }
+
+    const stopped = await runDockerAction(
+      vscode.l10n.t('Stopping Docker containers for {0}…', oldName),
+      () => stopCompose(pending.oldPath),
+      vscode.l10n.t('Docker containers for {0} stopped.', oldName),
+      (err) => vscode.l10n.t('Failed to stop Docker containers for "{0}": {1}', oldName, err instanceof Error ? err.message : String(err))
+    );
+    if (!stopped) {
+      return;
+    }
+
+    // `docker compose stop` normally only returns once every container has
+    // actually exited, but confirm against `docker ps` before starting the new
+    // project anyway — starting while a port from the old project is still
+    // bound is what causes only some of the new containers to come up.
+    for (let attempt = 0; attempt < 5 && isDockerRunning(pending.oldPath); attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await refreshDockerState();
+    }
+    if (isDockerRunning(pending.oldPath)) {
+      vscode.window.showErrorMessage(
+        vscode.l10n.t('Docker containers for "{0}" are still running. Not starting "{1}" to avoid port conflicts.', oldName, newName)
+      );
+      refreshAll();
+      return;
+    }
+
+    await runDockerAction(
+      vscode.l10n.t('Starting Docker containers for {0}…', newName),
+      () => startCompose(pending.newPath),
+      vscode.l10n.t('Docker containers for {0} started.', newName),
+      (err) => vscode.l10n.t('Failed to start Docker containers for "{0}": {1}', newName, err instanceof Error ? err.message : String(err))
+    );
+  }
+  checkPendingDockerSwitch();
+
   context.subscriptions.push(
     treeView,
+    rootsView,
     statusBarItem,
 
     vscode.commands.registerCommand('folderize.showVersion', () => {
@@ -394,6 +789,7 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       if (picked.fullPath) {
+        await stagePendingDockerSwitch(picked.fullPath);
         vscode.commands.executeCommand(
           'vscode.openFolder',
           vscode.Uri.file(picked.fullPath),
@@ -404,8 +800,12 @@ export function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('folderize.refresh', async () => {
       invalidateSubfolderCache();
+      invalidateDockerComposeCache();
       await pruneRecents(new Set(listProjects().map((p) => p.fullPath)));
-      refreshAll();
+      // A manual refresh should feel immediate, unlike the debounced refreshAll()
+      // used for background events (watchers, polling, config changes).
+      refreshAllNow();
+      detectDuplicateProjects();
     }),
 
     vscode.commands.registerCommand('folderize.openProject', async (item: ProjectTreeItem) => {
@@ -413,6 +813,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showErrorMessage(vscode.l10n.t('Folder not found on disk: {0}', item.fullPath));
         return;
       }
+      await stagePendingDockerSwitch(item.fullPath);
       await recordRecentOpen(item.fullPath);
       refreshAll();
       vscode.commands.executeCommand(
@@ -530,13 +931,180 @@ export function activate(context: vscode.ExtensionContext) {
       'folderize.toggleFavorite',
       async (item: ProjectTreeItem, selected?: ProjectTreeItem[]) => {
         const targets = selected && selected.length > 0 ? selected : [item];
-        const isFavorite = item.contextValue === 'projectFavorite';
+        const isFavorite = item.isFavorite;
         for (const target of targets) {
           await updateProjectMeta(target.fullPath, { favorite: !isFavorite });
         }
         refreshAll();
       }
     ),
+
+    vscode.commands.registerCommand('folderize.dockerStart', async (item: ProjectTreeItem) => {
+      const normalizedItemPath = normalizeProjectPath(item.fullPath);
+      const otherRunningDirs = getRunningWorkingDirs().filter((dir) => dir !== normalizedItemPath);
+      if (otherRunningDirs.length > 0) {
+        const projectsByPath = new Map(listProjects().map((p) => [normalizeProjectPath(p.fullPath), p.label]));
+        const names = otherRunningDirs.map((dir) => projectsByPath.get(dir) ?? dir).join(', ');
+        const stopAndStart = vscode.l10n.t('Stop and start');
+        const startAnyway = vscode.l10n.t('Start anyway');
+        const choice = await vscode.window.showWarningMessage(
+          otherRunningDirs.length === 1
+            ? vscode.l10n.t('"{0}" is already running. Stop it before starting "{1}"?', names, item.label)
+            : vscode.l10n.t(
+                '{0} other projects are already running ({1}). Stop them before starting "{2}"?',
+                otherRunningDirs.length,
+                names,
+                item.label
+              ),
+          stopAndStart,
+          startAnyway
+        );
+        if (choice === undefined) {
+          return;
+        }
+        if (choice === stopAndStart) {
+          for (const dir of otherRunningDirs) {
+            const dirName = projectsByPath.get(dir) ?? dir;
+            const stopped = await runDockerAction(
+              vscode.l10n.t('Stopping Docker containers for {0}…', dirName),
+              () => stopCompose(dir),
+              vscode.l10n.t('Docker containers for {0} stopped.', dirName),
+              (err) => vscode.l10n.t('Failed to stop Docker containers for "{0}": {1}', dirName, err instanceof Error ? err.message : String(err))
+            );
+            if (!stopped) {
+              return;
+            }
+          }
+        }
+      }
+
+      await runDockerAction(
+        vscode.l10n.t('Starting Docker containers for {0}…', item.label),
+        () => startCompose(item.fullPath),
+        vscode.l10n.t('Docker containers for {0} started.', item.label),
+        (err) => vscode.l10n.t('Failed to start Docker containers for "{0}": {1}', item.label, err instanceof Error ? err.message : String(err))
+      );
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerStop', async (item: ProjectTreeItem) => {
+      await runDockerAction(
+        vscode.l10n.t('Stopping Docker containers for {0}…', item.label),
+        () => stopCompose(item.fullPath),
+        vscode.l10n.t('Docker containers for {0} stopped.', item.label),
+        (err) => vscode.l10n.t('Failed to stop Docker containers for "{0}": {1}', item.label, err instanceof Error ? err.message : String(err))
+      );
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerRestart', async (item: ProjectTreeItem) => {
+      await runDockerAction(
+        vscode.l10n.t('Restarting Docker containers for {0}…', item.label),
+        () => restartCompose(item.fullPath),
+        vscode.l10n.t('Docker containers for {0} restarted.', item.label),
+        (err) => vscode.l10n.t('Failed to restart Docker containers for "{0}": {1}', item.label, err instanceof Error ? err.message : String(err))
+      );
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerStartAll', async () => {
+      const projectPath = currentProjectPath();
+      if (!projectPath) {
+        return;
+      }
+      await runDockerAction(
+        vscode.l10n.t('Starting all containers…'),
+        () => startCompose(projectPath),
+        vscode.l10n.t('All containers started.'),
+        (err) => vscode.l10n.t('Failed to start containers: {0}', err instanceof Error ? err.message : String(err))
+      );
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerPauseAll', async () => {
+      const projectPath = currentProjectPath();
+      if (!projectPath) {
+        return;
+      }
+      await runDockerAction(
+        vscode.l10n.t('Pausing all containers…'),
+        () => pauseCompose(projectPath),
+        vscode.l10n.t('All containers paused.'),
+        (err) => vscode.l10n.t('Failed to pause containers: {0}', err instanceof Error ? err.message : String(err))
+      );
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerRestartAll', async () => {
+      const projectPath = currentProjectPath();
+      if (!projectPath) {
+        return;
+      }
+      await runDockerAction(
+        vscode.l10n.t('Restarting all containers…'),
+        () => restartCompose(projectPath),
+        vscode.l10n.t('All containers restarted.'),
+        (err) => vscode.l10n.t('Failed to restart containers: {0}', err instanceof Error ? err.message : String(err))
+      );
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerContainerStart', async (item: DockerContainerTreeItem) => {
+      try {
+        await startContainer(item.container.id);
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          vscode.l10n.t('Failed to start "{0}": {1}', item.container.name, err instanceof Error ? err.message : String(err))
+        );
+      } finally {
+        dockerProvider.refresh();
+      }
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerContainerStop', async (item: DockerContainerTreeItem) => {
+      try {
+        await stopContainer(item.container.id);
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          vscode.l10n.t('Failed to stop "{0}": {1}', item.container.name, err instanceof Error ? err.message : String(err))
+        );
+      } finally {
+        dockerProvider.refresh();
+      }
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerContainerPause', async (item: DockerContainerTreeItem) => {
+      try {
+        await pauseContainer(item.container.id);
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          vscode.l10n.t('Failed to pause "{0}": {1}', item.container.name, err instanceof Error ? err.message : String(err))
+        );
+      } finally {
+        dockerProvider.refresh();
+      }
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerContainerUnpause', async (item: DockerContainerTreeItem) => {
+      try {
+        await unpauseContainer(item.container.id);
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          vscode.l10n.t('Failed to resume "{0}": {1}', item.container.name, err instanceof Error ? err.message : String(err))
+        );
+      } finally {
+        dockerProvider.refresh();
+      }
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerContainerExec', (item: DockerContainerTreeItem) => {
+      // Always a fresh terminal: reusing one by name risked typing `docker exec`
+      // into a terminal that was already attached inside a previous container
+      // shell (which has no `docker` binary of its own), silently failing.
+      const terminal = vscode.window.createTerminal(`Docker: ${item.container.name}`);
+      terminal.show();
+      // Clears the screen and scrollback right after attaching, so the typed
+      // `docker exec` line doesn't linger above the container's own prompt.
+      // Falls back to a raw ANSI clear sequence when `clear` isn't installed
+      // in the image (common on minimal/distroless containers).
+      terminal.sendText(
+        `docker exec -it '${item.container.id}' sh -c "clear 2>/dev/null || printf '\\033[2J\\033[3J\\033[H'; [ -x /bin/bash ] && exec bash || exec sh"`
+      );
+    }),
 
     vscode.commands.registerCommand('folderize.addCategory', async () => {
       const raw = await vscode.window.showInputBox({ prompt: vscode.l10n.t('New category name') });
@@ -600,6 +1168,44 @@ export function activate(context: vscode.ExtensionContext) {
       refreshAll();
     }),
 
+    vscode.commands.registerCommand('folderize.removeRootFolder', async (item: RootFolderTreeItem) => {
+      const confirm = await vscode.window.showWarningMessage(
+        vscode.l10n.t(
+          'Remove root folder "{0}" from Folderize? Projects found in it stop being listed, but nothing is deleted from disk.',
+          item.fullPath
+        ),
+        { modal: true },
+        vscode.l10n.t('Remove')
+      );
+      if (confirm !== vscode.l10n.t('Remove')) {
+        return;
+      }
+
+      const config = vscode.workspace.getConfiguration('folderize');
+      const rootFolders = config.get<string[]>('rootFolders', []);
+      await config.update(
+        'rootFolders',
+        rootFolders.filter((r) => r !== item.fullPath),
+        vscode.ConfigurationTarget.Global
+      );
+      invalidateSubfolderCache(item.fullPath);
+      refreshAll();
+    }),
+
+    vscode.commands.registerCommand('folderize.includeExcludedPath', async (item: RootChildItem) => {
+      await unexcludePath(item.fullPath);
+      refreshAll();
+    }),
+
+    vscode.commands.registerCommand('folderize.ignoreFoundPath', async (item: RootChildItem) => {
+      const config = vscode.workspace.getConfiguration('folderize');
+      const excludedPaths = config.get<string[]>('excludedPaths', []);
+      if (!excludedPaths.includes(item.fullPath)) {
+        await config.update('excludedPaths', [...excludedPaths, item.fullPath], vscode.ConfigurationTarget.Global);
+      }
+      refreshAll();
+    }),
+
     vscode.commands.registerCommand('folderize.addCurrentFolder', async () => {
       const folders = vscode.workspace.workspaceFolders;
       if (!folders || folders.length === 0) {
@@ -630,18 +1236,11 @@ export function activate(context: vscode.ExtensionContext) {
           command: 'folderize.addCurrentFolder',
         });
       }
-      options.push(
-        {
-          label: `$(folder) ${vscode.l10n.t('Add project')}`,
-          description: vscode.l10n.t('Choose a specific folder to add as a single project'),
-          command: 'folderize.addProject',
-        },
-        {
-          label: `$(root-folder) ${vscode.l10n.t('Add root folder')}`,
-          description: vscode.l10n.t('Choose a folder and list its subfolders as projects'),
-          command: 'folderize.addRootFolder',
-        }
-      );
+      options.push({
+        label: `$(folder) ${vscode.l10n.t('Add folder')}`,
+        description: vscode.l10n.t('Choose a folder — Folderize figures out whether it\'s a single project or a folder full of projects'),
+        command: 'folderize.addFolder',
+      });
 
       const choice = await vscode.window.showQuickPick(options, {
         placeHolder: vscode.l10n.t('What do you want to add?'),
@@ -698,34 +1297,29 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
 
-      const newPath = picked[0].fsPath;
+      await smartAddPath(picked[0].fsPath);
+    }),
 
-      if (!looksLikeProject(newPath)) {
-        const subfolderCount = countSubfolders(newPath);
-        const subprojectCount = countSubfoldersLookingLikeProjects(newPath);
-        if (subfolderCount >= 2 && subprojectCount >= 2) {
-          const addAsRoot = vscode.l10n.t('Add as root folder');
-          const continueAsProject = vscode.l10n.t('Continue as project');
-          const choice = await vscode.window.showWarningMessage(
-            vscode.l10n.t(
-              '"{0}" looks like it contains multiple projects ({1} found), not a single project.',
-              path.basename(newPath),
-              subprojectCount
-            ),
-            addAsRoot,
-            continueAsProject
-          );
-          if (choice === addAsRoot) {
-            await addRootFolderPath(newPath);
-            return;
-          }
-          if (choice !== continueAsProject) {
-            return;
-          }
-        }
+    vscode.commands.registerCommand('folderize.addDroppedPaths', async (paths: string[]) => {
+      const tracked = new Set(listProjects().map((p) => p.fullPath));
+      const newPaths = paths.filter((p) => !tracked.has(p));
+      for (const p of newPaths) {
+        await smartAddPath(p);
+      }
+    }),
+
+    vscode.commands.registerCommand('folderize.addFolder', async () => {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: vscode.l10n.t('Add folder'),
+      });
+      if (!picked || picked.length === 0) {
+        return;
       }
 
-      await addProjectPath(newPath);
+      await smartAddPath(picked[0].fsPath);
     }),
 
     vscode.commands.registerCommand('folderize.adjustOrder', async () => {
@@ -958,9 +1552,223 @@ export function activate(context: vscode.ExtensionContext) {
       context.subscriptions.push(manageSaveListener);
     }),
 
+    vscode.commands.registerCommand('folderize.exportBackup', async () => {
+      const config = vscode.workspace.getConfiguration('folderize');
+      const backup = {
+        folderizeBackup: true,
+        version: BACKUP_VERSION,
+        rootFolders: config.get<string[]>('rootFolders', []),
+        projects: config.get<string[]>('projects', []),
+        categories: config.get<string[]>('categories', []),
+        projectMeta: getProjectMeta(),
+        excludedPaths: config.get<string[]>('excludedPaths', []),
+        uncategorizedPosition: config.get<number>('uncategorizedPosition', -1),
+        recentEntries: getRecentEntries(),
+      };
+
+      const defaultName = `folderize-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      const uri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file(path.join(os.homedir(), defaultName)),
+        filters: { JSON: ['json'] },
+        saveLabel: vscode.l10n.t('Export backup'),
+      });
+      if (!uri) {
+        return;
+      }
+
+      try {
+        fs.writeFileSync(uri.fsPath, JSON.stringify(backup, null, 2), 'utf8');
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          vscode.l10n.t('Failed to export backup to "{0}": {1}', uri.fsPath, err instanceof Error ? err.message : String(err))
+        );
+        return;
+      }
+      vscode.window.showInformationMessage(vscode.l10n.t('Backup exported to {0}.', uri.fsPath));
+    }),
+
+    vscode.commands.registerCommand('folderize.importBackup', async () => {
+      const picked = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: false,
+        filters: { JSON: ['json'] },
+        openLabel: vscode.l10n.t('Import backup'),
+      });
+      if (!picked || picked.length === 0) {
+        return;
+      }
+
+      let data: {
+        folderizeBackup?: unknown;
+        version?: unknown;
+        rootFolders?: unknown;
+        projects?: unknown;
+        categories?: unknown;
+        projectMeta?: unknown;
+        excludedPaths?: unknown;
+        uncategorizedPosition?: unknown;
+        recentEntries?: unknown;
+        recentPaths?: unknown;
+      };
+      try {
+        const raw = fs.readFileSync(picked[0].fsPath, 'utf8');
+        data = JSON.parse(raw);
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          vscode.l10n.t('Invalid JSON: {0}', err instanceof Error ? err.message : String(err))
+        );
+        return;
+      }
+
+      const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+      const isRecentEntryArray = (v: unknown): v is { fullPath: string; openedAt: number }[] =>
+        Array.isArray(v) &&
+        v.every((x) => x && typeof x === 'object' && typeof x.fullPath === 'string' && typeof x.openedAt === 'number');
+      // A permissive shape check: only validates the fields Folderize actually
+      // reads (see ProjectMetaEntry in projects.ts), so a backup edited by hand
+      // or with a stray extra field doesn't get rejected outright.
+      const isValidProjectMeta = (v: unknown): boolean => {
+        if (!v || typeof v !== 'object' || Array.isArray(v)) {
+          return false;
+        }
+        return Object.values(v as Record<string, unknown>).every((entry) => {
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+            return false;
+          }
+          const e = entry as Record<string, unknown>;
+          return (
+            (e.category === undefined || typeof e.category === 'string') &&
+            (e.order === undefined || typeof e.order === 'number') &&
+            (e.favorite === undefined || typeof e.favorite === 'boolean') &&
+            (e.favoriteOrder === undefined || typeof e.favoriteOrder === 'number') &&
+            (e.displayName === undefined || typeof e.displayName === 'string')
+          );
+        });
+      };
+
+      if (data.folderizeBackup !== true || typeof data.version !== 'number') {
+        vscode.window.showErrorMessage(vscode.l10n.t('This file is not a valid Folderize backup.'));
+        return;
+      }
+      if (data.version > BACKUP_VERSION) {
+        vscode.window.showErrorMessage(
+          vscode.l10n.t('This backup was created with a newer version of Folderize. Update the extension and try again.')
+        );
+        return;
+      }
+      if (
+        !isStringArray(data.rootFolders ?? []) ||
+        !isStringArray(data.projects ?? []) ||
+        !isStringArray(data.categories ?? []) ||
+        !isStringArray(data.excludedPaths ?? []) ||
+        !isRecentEntryArray(data.recentEntries ?? []) ||
+        !isStringArray(data.recentPaths ?? []) ||
+        !isValidProjectMeta(data.projectMeta ?? {}) ||
+        typeof (data.uncategorizedPosition ?? -1) !== 'number'
+      ) {
+        vscode.window.showErrorMessage(vscode.l10n.t('This file is not a valid Folderize backup.'));
+        return;
+      }
+
+      const replace = vscode.l10n.t('Replace');
+      const confirm = await vscode.window.showWarningMessage(
+        vscode.l10n.t(
+          'This will replace your current Folderize configuration (root folders, projects, categories, favorites) with the contents of this backup. Continue?'
+        ),
+        { modal: true },
+        replace
+      );
+      if (confirm !== replace) {
+        return;
+      }
+
+      // De-duplicates and drops anything that isn't a real absolute filesystem
+      // path — a hand-edited or corrupted backup could otherwise seed the
+      // config with blank/relative entries that break path comparisons later.
+      const sanitizePaths = (values: string[]): string[] => [
+        ...new Set(values.map((v) => v.trim()).filter((v) => v.length > 0 && path.isAbsolute(v))),
+      ];
+      const sanitizedRootFolders = sanitizePaths((data.rootFolders as string[]) ?? []);
+      const sanitizedProjects = sanitizePaths((data.projects as string[]) ?? []);
+      const sanitizedExcludedPaths = sanitizePaths((data.excludedPaths as string[]) ?? []);
+      const sanitizedCategories = [
+        ...new Set(((data.categories as string[]) ?? []).map((c) => c.trim()).filter((c) => c.length > 0)),
+      ];
+
+      const config = vscode.workspace.getConfiguration('folderize');
+      await config.update('rootFolders', sanitizedRootFolders, vscode.ConfigurationTarget.Global);
+      await config.update('projects', sanitizedProjects, vscode.ConfigurationTarget.Global);
+      await config.update('categories', sanitizedCategories, vscode.ConfigurationTarget.Global);
+      await config.update('projectMeta', data.projectMeta ?? {}, vscode.ConfigurationTarget.Global);
+      await config.update('excludedPaths', sanitizedExcludedPaths, vscode.ConfigurationTarget.Global);
+      await config.update(
+        'uncategorizedPosition',
+        data.uncategorizedPosition ?? -1,
+        vscode.ConfigurationTarget.Global
+      );
+      if (data.recentEntries) {
+        await restoreRecentEntries(data.recentEntries as { fullPath: string; openedAt: number }[]);
+      } else if (data.recentPaths) {
+        await restoreRecents(data.recentPaths as string[]);
+      }
+
+      invalidateSubfolderCache();
+      refreshAll();
+      vscode.window.showInformationMessage(vscode.l10n.t('Folderize backup imported.'));
+    }),
+
+    vscode.commands.registerCommand('folderize.resetAll', async () => {
+      const config = vscode.workspace.getConfiguration('folderize');
+      const hasAnyData =
+        config.get<string[]>('rootFolders', []).length > 0 ||
+        config.get<string[]>('projects', []).length > 0 ||
+        config.get<string[]>('categories', []).length > 0 ||
+        Object.keys(getProjectMeta()).length > 0 ||
+        config.get<string[]>('excludedPaths', []).length > 0;
+      if (!hasAnyData) {
+        vscode.window.showInformationMessage(vscode.l10n.t('There is nothing to reset — Folderize is already empty.'));
+        return;
+      }
+
+      const reset = vscode.l10n.t('Reset everything');
+      const confirm = await vscode.window.showWarningMessage(
+        vscode.l10n.t(
+          'This erases ALL Folderize data — root folders, projects, categories, favorites, hidden/excluded paths and recent history — as if it were freshly installed. This cannot be undone unless you exported a backup. Continue?'
+        ),
+        { modal: true },
+        reset
+      );
+      if (confirm !== reset) {
+        return;
+      }
+
+      await config.update('rootFolders', [], vscode.ConfigurationTarget.Global);
+      await config.update('projects', [], vscode.ConfigurationTarget.Global);
+      await config.update('categories', [], vscode.ConfigurationTarget.Global);
+      await config.update('projectMeta', {}, vscode.ConfigurationTarget.Global);
+      await config.update('excludedPaths', [], vscode.ConfigurationTarget.Global);
+      await config.update('uncategorizedPosition', -1, vscode.ConfigurationTarget.Global);
+      await clearRecents();
+      await context.globalState.update('folderize.ignoredScanParents', undefined);
+      await context.globalState.update('folderize.ignoredDuplicatePaths', undefined);
+
+      invalidateSubfolderCache();
+      refreshAll();
+      vscode.window.showInformationMessage(vscode.l10n.t('Folderize was reset.'));
+    }),
+
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration('folderize.rootFolders')) {
         setupFolderWatchers();
+      }
+      if (e.affectsConfiguration('folderize.projects')) {
+        setupProjectComposeWatchers();
+      }
+      if (e.affectsConfiguration('folderize.projectMeta')) {
+        // Safety net for changes that didn't go through saveProjectMeta (e.g. the
+        // user editing settings.json directly, or another window's write syncing in).
+        invalidateProjectMetaCache();
       }
       if (
         e.affectsConfiguration('folderize.rootFolders') ||
@@ -976,7 +1784,9 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.workspace.onDidChangeWorkspaceFolders(() => treeProvider.refresh())
   );
 
+  showOnboardingIfFirstRun();
   detectSiblingProjects();
+  detectDuplicateProjects();
 }
 
 function countSubfolders(root: string): number {

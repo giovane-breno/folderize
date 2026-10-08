@@ -76,7 +76,8 @@
         {
           "id": "folderize.rootsView",
           "name": "%folderize.view.roots%",
-          "visibility": "collapsed"
+          "visibility": "collapsed",
+          "when": "folderize.hasRootFolders"
         },
         {
           "id": "folderize.dockerView",
@@ -262,6 +263,11 @@
         "icon": "$(debug-stop)"
       },
       {
+        "command": "folderize.dockerContainerRestart",
+        "title": "%folderize.command.dockerContainerRestart%",
+        "icon": "$(debug-restart)"
+      },
+      {
         "command": "folderize.dockerContainerPause",
         "title": "%folderize.command.dockerContainerPause%",
         "icon": "$(debug-pause)"
@@ -277,9 +283,23 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "folderize.dockerContainerLogs",
+        "title": "%folderize.command.dockerContainerLogs%",
+        "icon": "$(output)"
+      },
+      {
+        "command": "folderize.dockerContainerOpenBrowser",
+        "title": "%folderize.command.dockerContainerOpenBrowser%",
+        "icon": "$(globe)"
+      },
+      {
         "command": "folderize.dockerContainerCopyExec",
         "title": "%folderize.command.dockerContainerCopyExec%",
         "icon": "$(copy)"
+      },
+      {
+        "command": "folderize.dockerOpenContainerShell",
+        "title": "%folderize.command.dockerOpenContainerShell%"
       },
       {
         "command": "folderize.removeRootFolder",
@@ -354,11 +374,6 @@
           "group": "navigation@1"
         },
         {
-          "command": "folderize.dockerPauseAll",
-          "when": "view == folderize.dockerView",
-          "group": "navigation@2"
-        },
-        {
           "command": "folderize.dockerRestartAll",
           "when": "view == folderize.dockerView",
           "group": "navigation@3"
@@ -426,24 +441,29 @@
           "group": "inline@2"
         },
         {
-          "command": "folderize.dockerContainerExec",
-          "when": "view == folderize.dockerView && viewItem =~ /^container-running/",
-          "group": "inline@1"
-        },
-        {
           "command": "folderize.dockerContainerCopyExec",
           "when": "view == folderize.dockerView && viewItem =~ /^container-/",
           "group": "1_open@1"
         },
         {
-          "command": "folderize.dockerContainerPause",
-          "when": "view == folderize.dockerView && viewItem =~ /^container-running/",
-          "group": "inline@2"
+          "command": "folderize.dockerContainerLogs",
+          "when": "view == folderize.dockerView && viewItem =~ /^container-/",
+          "group": "1_open@2"
+        },
+        {
+          "command": "folderize.dockerContainerOpenBrowser",
+          "when": "view == folderize.dockerView && viewItem =~ /-ports$/",
+          "group": "inline@5"
         },
         {
           "command": "folderize.dockerContainerStop",
           "when": "view == folderize.dockerView && viewItem =~ /^container-(running|paused)/",
           "group": "inline@3"
+        },
+        {
+          "command": "folderize.dockerContainerRestart",
+          "when": "view == folderize.dockerView && viewItem =~ /^container-/",
+          "group": "inline@4"
         },
         {
           "command": "folderize.dockerContainerUnpause",

@@ -1,0 +1,6 @@
+services:
+  folderize-docker-test:
+    image: nginx:alpine
+    container_name: folderize-docker-test
+    ports:
+      - "18080:80"

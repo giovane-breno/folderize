@@ -17,7 +17,7 @@ export class DockerContainerTreeItem extends vscode.TreeItem {
         arguments: [this],
       };
     }
-    this.contextValue = `container-${normalizedState}`;
+    this.contextValue = `container-${normalizedState}${container.ports ? '-ports' : ''}`;
 
     if (normalizedState === 'running') {
       this.iconPath = new vscode.ThemeIcon('circle-filled', new vscode.ThemeColor('charts.green'));

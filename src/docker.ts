@@ -63,6 +63,41 @@ export function isDockerAvailable(): boolean {
   return dockerAvailable;
 }
 
+export function startDockerEngine(): Promise<void> {
+  if (process.platform !== 'darwin') {
+    return Promise.reject(new Error('Automatic Docker engine startup is currently supported on macOS only.'));
+  }
+
+  return (async () => {
+    const context = (await execAsync('docker context show', { timeout: 5000 }).catch(() => '')).trim().toLowerCase();
+    const candidates: string[] = [];
+
+    if (context.includes('orbstack')) {
+      candidates.push('open -a OrbStack');
+    } else if (context.includes('desktop')) {
+      candidates.push('open -a Docker');
+    } else if (context.includes('colima')) {
+      candidates.push('colima start');
+    } else if (context.includes('rancher')) {
+      candidates.push('open -a "Rancher Desktop"');
+    }
+
+    candidates.push('docker desktop start', 'open -a OrbStack', 'open -a Docker', 'open -a "Rancher Desktop"', 'colima start');
+
+    const errors: string[] = [];
+    for (const command of [...new Set(candidates)]) {
+      try {
+        await execAsync(command, { timeout: 30000 });
+        return;
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    throw new Error(`No supported Docker engine could be started${errors.length ? `: ${errors[errors.length - 1]}` : '.'}`);
+  })();
+}
+
 export function getRunningWorkingDirs(): string[] {
   return [...runningWorkingDirs];
 }
@@ -170,6 +205,8 @@ export interface ContainerInfo {
   name: string;
   service: string;
   image: string;
+  /** Published host/container ports reported by Docker, e.g. 0.0.0.0:18080->80/tcp. */
+  ports: string;
   /** Raw `docker ps` state: running | paused | exited | created | restarting | dead | … */
   state: string;
   status: string;
@@ -186,7 +223,8 @@ export async function listContainersForProject(projectPath: string): Promise<Con
     output = await execAsync(
       'docker ps -a --filter "label=com.docker.compose.project.working_dir" ' +
         '--format "{{.ID}}\\t{{.Names}}\\t{{.State}}\\t{{.Status}}\\t{{.Image}}\\t' +
-        '{{.Label \\"com.docker.compose.service\\"}}\\t{{.Label \\"com.docker.compose.project.working_dir\\"}}"',
+        '{{.Label \\"com.docker.compose.service\\"}}\\t{{.Ports}}\\t' +
+        '{{.Label \\"com.docker.compose.project.working_dir\\"}}"',
       { timeout: 5000 }
     );
   } catch {
@@ -197,8 +235,8 @@ export async function listContainersForProject(projectPath: string): Promise<Con
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const [id, name, state, status, image, service, workingDir] = line.split('\t');
-      return { id, name, state, status, image, service: service || name, workingDir: workingDir || '' };
+      const [id, name, state, status, image, service, ports, workingDir] = line.split('\t');
+      return { id, name, state, status, image, service: service || name, ports: ports || '', workingDir: workingDir || '' };
     })
     .filter((c) => c.workingDir && normalizeProjectPath(c.workingDir) === target)
     .map(({ workingDir: _workingDir, ...container }) => container);
@@ -226,6 +264,10 @@ export function startContainer(ref: string): Promise<void> {
 
 export function stopContainer(ref: string): Promise<void> {
   return runContainerOp(ref, 'stop', 30000);
+}
+
+export function restartContainer(ref: string): Promise<void> {
+  return runContainerOp(ref, 'restart', 30000);
 }
 
 export function pauseContainer(ref: string): Promise<void> {

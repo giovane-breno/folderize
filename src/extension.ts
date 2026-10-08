@@ -31,18 +31,23 @@ import { OpenFolderDecorationProvider } from './openFolderDecorationProvider';
 import { openReorderPanel, ReorderCategory } from './reorderPanel';
 import { RootChildItem, RootFolderTreeItem, RootsTreeProvider } from './rootsTreeProvider';
 import {
+  ContainerInfo,
   COMPOSE_FILENAMES,
   getRunningWorkingDirs,
   hasDockerCompose,
   invalidateDockerComposeCache,
+  isDockerAvailable,
   isDockerRunning,
+  listContainersForProject,
   normalizeProjectPath,
   pauseCompose,
   pauseContainer,
   refreshDockerState,
+  restartContainer,
   restartCompose,
   startCompose,
   startContainer,
+  startDockerEngine,
   stopCompose,
   stopContainer,
   unpauseContainer,
@@ -166,6 +171,7 @@ export function activate(context: vscode.ExtensionContext) {
   function updateRootsDescription(): void {
     const count = rootsProvider.getRootFolders().length;
     rootsView.description = count > 0 ? String(count) : undefined;
+    vscode.commands.executeCommand('setContext', 'folderize.hasRootFolders', count > 0);
   }
   updateRootsDescription();
   context.subscriptions.push(rootsProvider.onDidChangeTreeData(() => updateRootsDescription()));
@@ -186,6 +192,7 @@ export function activate(context: vscode.ExtensionContext) {
       const composeWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, composeGlob));
       const invalidateComposeForFile = (uri: vscode.Uri) => {
         invalidateDockerComposeCache(path.dirname(uri.fsPath));
+        updateDockerStatusBarItem();
         refreshAll();
       };
       composeWatcher.onDidCreate(invalidateComposeForFile);
@@ -258,6 +265,7 @@ export function activate(context: vscode.ExtensionContext) {
       );
       const invalidateAndRefresh = () => {
         invalidateDockerComposeCache(projectPath);
+        updateDockerStatusBarItem();
         refreshAll();
       };
       watcher.onDidCreate(invalidateAndRefresh);
@@ -277,6 +285,7 @@ export function activate(context: vscode.ExtensionContext) {
     // flipping the running-working-dir set that refreshDockerState() tracks, so
     // the containers view refreshes independently of the `changed` flag above.
     dockerProvider.refresh();
+    setTimeout(() => void updateDockerStatusBarItem(), 0);
   }
   pollDockerState();
   const dockerPollInterval = setInterval(pollDockerState, 7000);
@@ -543,7 +552,44 @@ export function activate(context: vscode.ExtensionContext) {
     statusBarItem.text = `$(folder-library) ${name}`;
   }
   updateStatusBarItem();
-  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => updateStatusBarItem()));
+
+  const dockerStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
+  dockerStatusBarItem.text = '$(server-environment) 0';
+  dockerStatusBarItem.tooltip = vscode.l10n.t('Folderize: open a project container shell');
+  dockerStatusBarItem.command = 'folderize.dockerOpenContainerShell';
+  let dockerStatusBarUpdateId = 0;
+
+  async function updateDockerStatusBarItem(): Promise<void> {
+    const projectPath = currentProjectPath();
+    if (!projectPath) {
+      dockerStatusBarItem.hide();
+      return;
+    }
+    dockerStatusBarItem.show();
+
+    const updateId = ++dockerStatusBarUpdateId;
+    const containers = await listContainersForProject(projectPath);
+    if (updateId !== dockerStatusBarUpdateId || currentProjectPath() !== projectPath) {
+      return;
+    }
+    const activeCount = containers.filter((container) => container.state.toLowerCase() === 'running').length;
+    const pausedCount = containers.filter((container) => container.state.toLowerCase() === 'paused').length;
+    dockerStatusBarItem.text = `$(server-environment) ${activeCount}`;
+    dockerStatusBarItem.tooltip = !isDockerAvailable()
+      ? vscode.l10n.t('Docker (unavailable)')
+      : vscode.l10n.t(
+          'Docker: {0} active containers{1}',
+          activeCount,
+          pausedCount > 0 ? vscode.l10n.t(' and {0} paused', pausedCount) : ''
+        );
+  }
+  void updateDockerStatusBarItem();
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      updateStatusBarItem();
+      void updateDockerStatusBarItem();
+    })
+  );
 
   // "Switch environment" — when opening a project in this window while the
   // currently open one still has Docker running, offer to hand off: stop the
@@ -678,14 +724,159 @@ export function activate(context: vscode.ExtensionContext) {
     return `docker exec -it '${item.container.id}' sh -c "clear 2>/dev/null || printf '\\033[2J\\033[3J\\033[H'; ${shellInvocation}"`;
   }
 
+  function dockerLogsCommand(item: DockerContainerTreeItem): string {
+    return `docker logs --tail 200 -f '${item.container.id}'`;
+  }
+
+  function getContainerBrowserUrls(container: ContainerInfo): string[] {
+    const ports = [...container.ports.matchAll(/:(\d+)->\d+\/tcp/g)].map((match) => `http://localhost:${match[1]}`);
+    return [...new Set(ports)];
+  }
+
+  async function openDockerInBrowser(item: DockerContainerTreeItem): Promise<void> {
+    const urls = getContainerBrowserUrls(item.container);
+    if (urls.length === 0) {
+      vscode.window.showInformationMessage(vscode.l10n.t('This container has no published web port.'));
+      return;
+    }
+    const url =
+      urls.length === 1
+        ? urls[0]
+        : await vscode.window.showQuickPick(urls, { placeHolder: vscode.l10n.t('Choose a port to open in the browser') });
+    if (url) {
+      await vscode.env.openExternal(vscode.Uri.parse(url));
+    }
+  }
+
+  function openDockerLogs(item: DockerContainerTreeItem): void {
+    const terminal = vscode.window.createTerminal(`Logs: ${item.container.name}`);
+    terminal.show();
+    terminal.sendText(dockerLogsCommand(item));
+  }
+
+  async function openDockerContainerShell(): Promise<void> {
+    const projectPath = currentProjectPath();
+    if (!projectPath) {
+      return;
+    }
+
+    const containers = (await listContainersForProject(projectPath)).filter(
+      (container) => container.state.toLowerCase() === 'running'
+    );
+    if (containers.length === 0) {
+      await refreshDockerState();
+      if (!isDockerAvailable()) {
+        const startDocker = vscode.l10n.t('Start Docker Desktop');
+        const choice = await vscode.window.showWarningMessage(
+          vscode.l10n.t('Docker is not running. Start Docker Desktop?'),
+          startDocker
+        );
+        if (choice !== startDocker) {
+          return;
+        }
+        try {
+          await startDockerEngine();
+          vscode.window.showInformationMessage(vscode.l10n.t('Docker Desktop is starting. Click the Docker button again when it is ready.'));
+        } catch (err) {
+          vscode.window.showErrorMessage(
+            vscode.l10n.t('Failed to start Docker Desktop: {0}', err instanceof Error ? err.message : String(err))
+          );
+        }
+        return;
+      }
+      const normalizedProjectPath = normalizeProjectPath(projectPath);
+      const otherRunningDirs = getRunningWorkingDirs().filter((dir) => dir !== normalizedProjectPath);
+      const projectName = path.basename(projectPath);
+
+      if (otherRunningDirs.length > 0) {
+        const projectsByPath = new Map(listProjects().map((p) => [normalizeProjectPath(p.fullPath), p.label]));
+        const names = otherRunningDirs.map((dir) => projectsByPath.get(dir) ?? dir).join(', ');
+        const stopAndStart = vscode.l10n.t('Stop and start');
+        const startAnyway = vscode.l10n.t('Start anyway');
+        const choice = await vscode.window.showWarningMessage(
+          otherRunningDirs.length === 1
+            ? vscode.l10n.t('"{0}" is already running. Stop it before starting "{1}"?', names, projectName)
+            : vscode.l10n.t(
+                '{0} other projects are already running ({1}). Stop them before starting "{2}"?',
+                otherRunningDirs.length,
+                names,
+                projectName
+              ),
+          stopAndStart,
+          startAnyway
+        );
+        if (choice === undefined) {
+          return;
+        }
+        if (choice === stopAndStart) {
+          for (const dir of otherRunningDirs) {
+            const dirName = projectsByPath.get(dir) ?? dir;
+            const stopped = await runDockerAction(
+              vscode.l10n.t('Stopping Docker containers for {0}…', dirName),
+              () => stopCompose(dir),
+              vscode.l10n.t('Docker containers for {0} stopped.', dirName),
+              (err) => vscode.l10n.t('Failed to stop Docker containers for "{0}": {1}', dirName, err instanceof Error ? err.message : String(err))
+            );
+            if (!stopped) {
+              return;
+            }
+          }
+        }
+      } else {
+        const start = vscode.l10n.t('Start containers');
+        const choice = await vscode.window.showInformationMessage(
+          vscode.l10n.t('No running Docker containers found for this project. Start them?'),
+          start
+        );
+        if (choice !== start) {
+          return;
+        }
+      }
+
+      await runDockerAction(
+        vscode.l10n.t('Starting Docker containers for {0}…', projectName),
+        () => startCompose(projectPath),
+        vscode.l10n.t('Docker containers for {0} started.', projectName),
+        (err) => vscode.l10n.t('Failed to start Docker containers for "{0}": {1}', projectName, err instanceof Error ? err.message : String(err))
+      );
+      return;
+    }
+
+    const picked = await vscode.window.showQuickPick(
+      containers.map((container) => ({
+        label: container.service,
+        description: `${container.name} · ${container.status}`,
+        container,
+      })),
+      { placeHolder: vscode.l10n.t('Choose a container to open its shell') }
+    );
+    if (!picked) {
+      return;
+    }
+
+    const item = new DockerContainerTreeItem(picked.container);
+    const terminalMode = vscode.workspace
+      .getConfiguration('folderize.docker')
+      .get<'new' | 'current'>('terminalMode', 'new');
+    const terminal =
+      terminalMode === 'current' && vscode.window.activeTerminal
+        ? vscode.window.activeTerminal
+        : vscode.window.createTerminal(`Docker: ${picked.container.name}`);
+    terminal.show();
+    terminal.sendText(dockerExecCommand(item));
+  }
+
   context.subscriptions.push(
     treeView,
     rootsView,
     statusBarItem,
+    dockerStatusBarItem,
 
     vscode.commands.registerCommand('folderize.showVersion', () => {
       vscode.window.showInformationMessage(`Folderize v${context.extension.packageJSON.version}`);
     }),
+
+    vscode.commands.registerCommand('folderize.dockerOpenContainerShell', openDockerContainerShell),
 
     vscode.commands.registerCommand('folderize.openGithub', () => {
       const url = context.extension.packageJSON.repository?.url as string | undefined;
@@ -1054,6 +1245,18 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    vscode.commands.registerCommand('folderize.dockerContainerRestart', async (item: DockerContainerTreeItem) => {
+      try {
+        await restartContainer(item.container.id);
+      } catch (err) {
+        vscode.window.showErrorMessage(
+          vscode.l10n.t('Failed to restart "{0}": {1}', item.container.name, err instanceof Error ? err.message : String(err))
+        );
+      } finally {
+        dockerProvider.refresh();
+      }
+    }),
+
     vscode.commands.registerCommand('folderize.dockerContainerPause', async (item: DockerContainerTreeItem) => {
       try {
         await pauseContainer(item.container.id);
@@ -1097,6 +1300,14 @@ export function activate(context: vscode.ExtensionContext) {
       // Falls back to a raw ANSI clear sequence when `clear` isn't installed
       // in the image (common on minimal/distroless containers).
       terminal.sendText(dockerExecCommand(item));
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerContainerLogs', (item: DockerContainerTreeItem) => {
+      openDockerLogs(item);
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerContainerOpenBrowser', async (item: DockerContainerTreeItem) => {
+      await openDockerInBrowser(item);
     }),
 
     vscode.commands.registerCommand('folderize.addCategory', async () => {

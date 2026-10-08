@@ -2,7 +2,7 @@
   "name": "folderize-projects",
   "displayName": "Folderizer",
   "description": "%folderize.description%",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "giovane-breno",
   "license": "MIT",
   "icon": "media/icon.png",

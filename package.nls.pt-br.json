@@ -3,12 +3,10 @@
   "folderize.color.openFolderForeground": "Cor do projeto atualmente aberto no Folderize",
   "folderize.view.favorites": "Favoritos",
   "folderize.view.projects": "Projetos",
-  "folderize.view.recents": "Recentes",
   "folderize.view.roots": "Pastas raiz",
   "folderize.view.aboutUs": "Sobre o Folderize",
   "folderize.view.docker": "Containers Docker",
   "folderize.viewsWelcome.projects": "Nenhum projeto cadastrado ainda.\n[Adicionar pasta](command:folderize.addFolder)",
-  "folderize.viewsWelcome.recents": "Seus projetos abertos recentemente aparecerão aqui.",
   "folderize.viewsWelcome.roots": "Nenhuma pasta raiz cadastrada ainda.\n[Adicionar pasta raiz](command:folderize.addRootFolder)",
   "folderize.viewsWelcome.docker": "Nenhum container encontrado. Rode `docker compose up` para criá-los.",
   "folderize.command.quickOpen": "Folderize: Buscar e abrir projeto",
@@ -50,7 +48,7 @@
   "folderize.command.dockerContainerPause": "Folderize: Pausar container",
   "folderize.command.dockerContainerUnpause": "Folderize: Retomar container",
   "folderize.command.dockerContainerExec": "Folderize: Abrir shell no container",
-  "folderize.command.clearRecents": "Folderize: Limpar recentes",
+  "folderize.command.dockerContainerCopyExec": "Folderize: Copiar comando docker exec",
   "folderize.command.removeRootFolder": "Folderize: Remover pasta raiz",
   "folderize.command.includeExcludedPath": "Folderize: Incluir projeto novamente",
   "folderize.command.ignoreFoundPath": "Folderize: Ignorar projeto",
@@ -59,5 +57,7 @@
   "folderize.config.categories": "Categorias criadas para organizar os projetos na sidebar.",
   "folderize.config.uncategorizedPosition": "Posição do grupo 'Sem categoria' na ordem das categorias (-1 = no final). Gerenciado pela extensão.",
   "folderize.config.projectMeta": "Metadados por projeto (categoria, ordem, favorito, nome de exibição). Gerenciado pela extensão.",
-  "folderize.config.excludedPaths": "Caminhos de subpastas escaneadas que foram removidas da listagem."
+  "folderize.config.excludedPaths": "Caminhos de subpastas escaneadas que foram removidas da listagem.",
+  "folderize.config.dockerShell": "Shell para abrir dentro dos containers Docker: auto tenta bash e usa sh como fallback.",
+  "folderize.config.dockerTerminalMode": "Abrir shells Docker em um terminal novo ou enviá-los ao terminal atualmente ativo."
 }

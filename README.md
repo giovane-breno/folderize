@@ -14,7 +14,7 @@ Folderize is local-first: project paths and preferences stay in VS Code settings
 - Organize projects into categories, reorder them with drag and drop, rename their display name, and mark favorites.
 - Open projects in the current or a new VS Code window; use the terminal, reveal the folder, copy its path, or open its `origin` remote.
 - Search all projects from the Command Palette or the Folderize status-bar action.
-- Keep track of recent projects, duplicate registrations, and paths missing from disk.
+- Detect duplicate registrations and paths missing from disk.
 - Export or import a JSON backup of your organization.
 
 ## Docker Compose

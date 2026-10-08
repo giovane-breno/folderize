@@ -126,7 +126,7 @@ async function doRefreshDockerState(): Promise<boolean> {
   }
 }
 
-// A project can appear in more than one view (Projects, Favorites, Recents) at
+// A project can appear in more than one view (Projects, Favorites) at
 // once, so a near-simultaneous click on each one's inline button would otherwise
 // fire concurrent `docker compose` calls for the same project — Compose locks
 // its project state while running, and the losing call fails with a lock error.

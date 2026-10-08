@@ -29,16 +29,6 @@ import { FavoritesViewProvider } from './favoritesViewProvider';
 import { HelpViewProvider } from './helpViewProvider';
 import { OpenFolderDecorationProvider } from './openFolderDecorationProvider';
 import { openReorderPanel, ReorderCategory } from './reorderPanel';
-import {
-  clearRecents,
-  getRecentEntries,
-  initRecents,
-  pruneRecents,
-  recordRecentOpen,
-  restoreRecentEntries,
-  restoreRecents,
-} from './recents';
-import { RecentsViewProvider } from './recentsViewProvider';
 import { RootChildItem, RootFolderTreeItem, RootsTreeProvider } from './rootsTreeProvider';
 import {
   COMPOSE_FILENAMES,
@@ -64,8 +54,10 @@ const BACKUP_VERSION = 1;
 export function activate(context: vscode.ExtensionContext) {
   let manageSaveListener: vscode.Disposable | undefined;
 
-  initRecents(context.globalState);
-  pruneRecents(new Set(listProjects().map((p) => p.fullPath)));
+  // Remove history created by older versions now that recent projects are no
+  // longer part of the extension.
+  void context.globalState.update('folderize.recentEntries', undefined);
+  void context.globalState.update('folderize.recentPaths', undefined);
 
   const treeProvider = new ProjectsTreeProvider();
   const treeView = vscode.window.createTreeView('folderize.projectsView', {
@@ -80,12 +72,6 @@ export function activate(context: vscode.ExtensionContext) {
     dragAndDropController: favoritesProvider,
   });
   context.subscriptions.push(favoritesView);
-
-  const recentsProvider = new RecentsViewProvider();
-  const recentsView = vscode.window.createTreeView('folderize.recentsView', {
-    treeDataProvider: recentsProvider,
-  });
-  context.subscriptions.push(recentsView);
 
   const rootsProvider = new RootsTreeProvider();
   const rootsView = vscode.window.createTreeView('folderize.rootsView', {
@@ -122,7 +108,6 @@ export function activate(context: vscode.ExtensionContext) {
   function refreshAllNow(): void {
     treeProvider.refresh();
     favoritesProvider.refresh();
-    recentsProvider.refresh();
     rootsProvider.refresh();
     dockerProvider.refresh();
   }
@@ -177,13 +162,6 @@ export function activate(context: vscode.ExtensionContext) {
   }
   updateFavoritesDescription();
   context.subscriptions.push(favoritesProvider.onDidChangeTreeData(() => updateFavoritesDescription()));
-
-  function updateRecentsDescription(): void {
-    const count = recentsProvider.getChildren().length;
-    recentsView.description = count > 0 ? describeCount(count) : undefined;
-  }
-  updateRecentsDescription();
-  context.subscriptions.push(recentsProvider.onDidChangeTreeData(() => updateRecentsDescription()));
 
   function updateRootsDescription(): void {
     const count = rootsProvider.getRootFolders().length;
@@ -686,6 +664,20 @@ export function activate(context: vscode.ExtensionContext) {
   }
   checkPendingDockerSwitch();
 
+  function dockerExecCommand(item: DockerContainerTreeItem): string {
+    const shell = vscode.workspace
+      .getConfiguration('folderize.docker')
+      .get<'auto' | 'bash' | 'sh'>('shell', 'auto');
+    const shellInvocation =
+      shell === 'bash'
+        ? 'exec bash'
+        : shell === 'sh'
+          ? 'exec sh'
+          : '[ -x /bin/bash ] && exec bash || exec sh';
+
+    return `docker exec -it '${item.container.id}' sh -c "clear 2>/dev/null || printf '\\033[2J\\033[3J\\033[H'; ${shellInvocation}"`;
+  }
+
   context.subscriptions.push(
     treeView,
     rootsView,
@@ -801,7 +793,6 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('folderize.refresh', async () => {
       invalidateSubfolderCache();
       invalidateDockerComposeCache();
-      await pruneRecents(new Set(listProjects().map((p) => p.fullPath)));
       // A manual refresh should feel immediate, unlike the debounced refreshAll()
       // used for background events (watchers, polling, config changes).
       refreshAllNow();
@@ -814,8 +805,6 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       await stagePendingDockerSwitch(item.fullPath);
-      await recordRecentOpen(item.fullPath);
-      refreshAll();
       vscode.commands.executeCommand(
         'vscode.openFolder',
         vscode.Uri.file(item.fullPath),
@@ -828,8 +817,6 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showErrorMessage(vscode.l10n.t('Folder not found on disk: {0}', item.fullPath));
         return;
       }
-      await recordRecentOpen(item.fullPath);
-      refreshAll();
       vscode.commands.executeCommand(
         'vscode.openFolder',
         vscode.Uri.file(item.fullPath),
@@ -1091,19 +1078,25 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    vscode.commands.registerCommand('folderize.dockerContainerCopyExec', async (item: DockerContainerTreeItem) => {
+      await vscode.env.clipboard.writeText(dockerExecCommand(item));
+      vscode.window.showInformationMessage(vscode.l10n.t('Docker command copied.'));
+    }),
+
     vscode.commands.registerCommand('folderize.dockerContainerExec', (item: DockerContainerTreeItem) => {
-      // Always a fresh terminal: reusing one by name risked typing `docker exec`
-      // into a terminal that was already attached inside a previous container
-      // shell (which has no `docker` binary of its own), silently failing.
-      const terminal = vscode.window.createTerminal(`Docker: ${item.container.name}`);
+      const terminalMode = vscode.workspace
+        .getConfiguration('folderize.docker')
+        .get<'new' | 'current'>('terminalMode', 'new');
+      const terminal =
+        terminalMode === 'current' && vscode.window.activeTerminal
+          ? vscode.window.activeTerminal
+          : vscode.window.createTerminal(`Docker: ${item.container.name}`);
       terminal.show();
       // Clears the screen and scrollback right after attaching, so the typed
       // `docker exec` line doesn't linger above the container's own prompt.
       // Falls back to a raw ANSI clear sequence when `clear` isn't installed
       // in the image (common on minimal/distroless containers).
-      terminal.sendText(
-        `docker exec -it '${item.container.id}' sh -c "clear 2>/dev/null || printf '\\033[2J\\033[3J\\033[H'; [ -x /bin/bash ] && exec bash || exec sh"`
-      );
+      terminal.sendText(dockerExecCommand(item));
     }),
 
     vscode.commands.registerCommand('folderize.addCategory', async () => {
@@ -1160,11 +1153,6 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       await removeCategoryEverywhere(item.categoryId);
-      refreshAll();
-    }),
-
-    vscode.commands.registerCommand('folderize.clearRecents', async () => {
-      await clearRecents();
       refreshAll();
     }),
 
@@ -1563,7 +1551,6 @@ export function activate(context: vscode.ExtensionContext) {
         projectMeta: getProjectMeta(),
         excludedPaths: config.get<string[]>('excludedPaths', []),
         uncategorizedPosition: config.get<number>('uncategorizedPosition', -1),
-        recentEntries: getRecentEntries(),
       };
 
       const defaultName = `folderize-backup-${new Date().toISOString().slice(0, 10)}.json`;
@@ -1608,8 +1595,6 @@ export function activate(context: vscode.ExtensionContext) {
         projectMeta?: unknown;
         excludedPaths?: unknown;
         uncategorizedPosition?: unknown;
-        recentEntries?: unknown;
-        recentPaths?: unknown;
       };
       try {
         const raw = fs.readFileSync(picked[0].fsPath, 'utf8');
@@ -1622,9 +1607,6 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
-      const isRecentEntryArray = (v: unknown): v is { fullPath: string; openedAt: number }[] =>
-        Array.isArray(v) &&
-        v.every((x) => x && typeof x === 'object' && typeof x.fullPath === 'string' && typeof x.openedAt === 'number');
       // A permissive shape check: only validates the fields Folderize actually
       // reads (see ProjectMetaEntry in projects.ts), so a backup edited by hand
       // or with a stray extra field doesn't get rejected outright.
@@ -1662,8 +1644,6 @@ export function activate(context: vscode.ExtensionContext) {
         !isStringArray(data.projects ?? []) ||
         !isStringArray(data.categories ?? []) ||
         !isStringArray(data.excludedPaths ?? []) ||
-        !isRecentEntryArray(data.recentEntries ?? []) ||
-        !isStringArray(data.recentPaths ?? []) ||
         !isValidProjectMeta(data.projectMeta ?? {}) ||
         typeof (data.uncategorizedPosition ?? -1) !== 'number'
       ) {
@@ -1707,12 +1687,6 @@ export function activate(context: vscode.ExtensionContext) {
         data.uncategorizedPosition ?? -1,
         vscode.ConfigurationTarget.Global
       );
-      if (data.recentEntries) {
-        await restoreRecentEntries(data.recentEntries as { fullPath: string; openedAt: number }[]);
-      } else if (data.recentPaths) {
-        await restoreRecents(data.recentPaths as string[]);
-      }
-
       invalidateSubfolderCache();
       refreshAll();
       vscode.window.showInformationMessage(vscode.l10n.t('Folderize backup imported.'));
@@ -1734,7 +1708,7 @@ export function activate(context: vscode.ExtensionContext) {
       const reset = vscode.l10n.t('Reset everything');
       const confirm = await vscode.window.showWarningMessage(
         vscode.l10n.t(
-          'This erases ALL Folderize data — root folders, projects, categories, favorites, hidden/excluded paths and recent history — as if it were freshly installed. This cannot be undone unless you exported a backup. Continue?'
+          'This erases ALL Folderize data — root folders, projects, categories, favorites and hidden/excluded paths — as if it were freshly installed. This cannot be undone unless you exported a backup. Continue?'
         ),
         { modal: true },
         reset
@@ -1749,7 +1723,6 @@ export function activate(context: vscode.ExtensionContext) {
       await config.update('projectMeta', {}, vscode.ConfigurationTarget.Global);
       await config.update('excludedPaths', [], vscode.ConfigurationTarget.Global);
       await config.update('uncategorizedPosition', -1, vscode.ConfigurationTarget.Global);
-      await clearRecents();
       await context.globalState.update('folderize.ignoredScanParents', undefined);
       await context.globalState.update('folderize.ignoredDuplicatePaths', undefined);
 

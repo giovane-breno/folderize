@@ -3,12 +3,10 @@
   "folderize.color.openFolderForeground": "Color of the project currently open in Folderize",
   "folderize.view.favorites": "Favorites",
   "folderize.view.projects": "Projects",
-  "folderize.view.recents": "Recent Projects",
   "folderize.view.roots": "Root Folders",
   "folderize.view.aboutUs": "About Folderize",
   "folderize.view.docker": "Docker Containers",
   "folderize.viewsWelcome.projects": "No projects added yet.\n[Add folder](command:folderize.addFolder)",
-  "folderize.viewsWelcome.recents": "Your recently opened projects will appear here.",
   "folderize.viewsWelcome.roots": "No root folders added yet.\n[Add root folder](command:folderize.addRootFolder)",
   "folderize.viewsWelcome.docker": "No containers found. Run `docker compose up` to create them.",
   "folderize.command.quickOpen": "Folderize: Search and open project",
@@ -50,7 +48,7 @@
   "folderize.command.dockerContainerPause": "Folderize: Pause container",
   "folderize.command.dockerContainerUnpause": "Folderize: Resume container",
   "folderize.command.dockerContainerExec": "Folderize: Open shell in container",
-  "folderize.command.clearRecents": "Folderize: Clear Recent Projects",
+  "folderize.command.dockerContainerCopyExec": "Folderize: Copy docker exec command",
   "folderize.command.removeRootFolder": "Folderize: Remove root folder",
   "folderize.command.includeExcludedPath": "Folderize: Include project again",
   "folderize.command.ignoreFoundPath": "Folderize: Ignore project",
@@ -59,5 +57,7 @@
   "folderize.config.categories": "Categories created to organize projects in the sidebar.",
   "folderize.config.uncategorizedPosition": "Position of the 'Uncategorized' group in the category order (-1 = at the end). Managed by the extension.",
   "folderize.config.projectMeta": "Per-project metadata (category, order, favorite, display name). Managed by the extension.",
-  "folderize.config.excludedPaths": "Scanned subfolder paths that were removed from the listing."
+  "folderize.config.excludedPaths": "Scanned subfolder paths that were removed from the listing.",
+  "folderize.config.dockerShell": "Shell to open inside Docker containers: auto tries bash and falls back to sh.",
+  "folderize.config.dockerTerminalMode": "Open Docker shells in a new terminal or send them to the currently active terminal."
 }

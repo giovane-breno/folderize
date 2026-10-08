@@ -5,10 +5,18 @@ export class DockerContainerTreeItem extends vscode.TreeItem {
   constructor(public readonly container: ContainerInfo) {
     super(container.service, vscode.TreeItemCollapsibleState.None);
 
-    this.description = container.status;
-    this.tooltip = `${container.name}\n${container.image}\n${container.status}`;
-
     const normalizedState = container.state.toLowerCase();
+    this.description = container.status;
+    this.tooltip = `${container.name}\n${container.image}\n${container.status}${
+      normalizedState === 'running' ? `\n${vscode.l10n.t('Click to open a shell in the container')}` : ''
+    }`;
+    if (normalizedState === 'running') {
+      this.command = {
+        command: 'folderize.dockerContainerExec',
+        title: vscode.l10n.t('Open shell in container'),
+        arguments: [this],
+      };
+    }
     this.contextValue = `container-${normalizedState}`;
 
     if (normalizedState === 'running') {

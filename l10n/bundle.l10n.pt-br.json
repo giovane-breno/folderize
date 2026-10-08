@@ -103,6 +103,9 @@
 
   "Docker (unavailable)": "Docker (indisponível)",
   "Docker": "Docker",
+  "Open shell in container": "Abrir shell no container",
+  "Click to open a shell in the container": "Clique para abrir um shell no container",
+  "Docker command copied.": "Comando Docker copiado.",
 
   "\"{0}\" is registered both in a root folder and as a manual project. Remove the manual entry? (it stays listed via the root folder)": "\"{0}\" está cadastrado tanto numa pasta raiz quanto como projeto manual. Remover a entrada manual? (ele continua listado pela pasta raiz)",
   "{0} projects are registered both in a root folder and manually ({1}). Remove the manual entries? (they stay listed via the root folder)": "{0} projetos estão cadastrados tanto numa pasta raiz quanto manualmente ({1}). Remover as entradas manuais? (eles continuam listados pela pasta raiz)",
@@ -118,7 +121,7 @@
   "Replace": "Substituir",
   "Folderize backup imported.": "Backup do Folderize importado.",
   "There is nothing to reset — Folderize is already empty.": "Não tem nada pra resetar — o Folderize já está vazio.",
-  "This erases ALL Folderize data — root folders, projects, categories, favorites, hidden/excluded paths and recent history — as if it were freshly installed. This cannot be undone unless you exported a backup. Continue?": "Isso apaga TODOS os dados do Folderize — pastas raiz, projetos, categorias, favoritos, caminhos ocultos/excluídos e histórico recente — como se fosse uma instalação nova. Não tem como desfazer, a não ser que você tenha exportado um backup. Continuar?",
+  "This erases ALL Folderize data — root folders, projects, categories, favorites and hidden/excluded paths — as if it were freshly installed. This cannot be undone unless you exported a backup. Continue?": "Isso apaga TODOS os dados do Folderize — pastas raiz, projetos, categorias, favoritos e caminhos ocultos/excluídos — como se fosse uma instalação nova. Não tem como desfazer, a não ser que você tenha exportado um backup. Continuar?",
   "Reset everything": "Resetar tudo",
   "Folderize was reset.": "O Folderize foi resetado.",
   "Add a project": "Adicionar um projeto",

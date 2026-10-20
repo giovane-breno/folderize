@@ -754,6 +754,197 @@ export function activate(context: vscode.ExtensionContext) {
     terminal.sendText(dockerLogsCommand(item));
   }
 
+  type DockerCommand = { name: string; command: string };
+  const manageDockerCommandsButton: vscode.QuickInputButton = {
+    iconPath: new vscode.ThemeIcon('terminal'),
+    tooltip: vscode.l10n.t('Manage saved Docker commands'),
+  };
+  const deleteDockerCommandButton: vscode.QuickInputButton = {
+    iconPath: new vscode.ThemeIcon('trash'),
+    tooltip: vscode.l10n.t('Delete command'),
+  };
+
+  function getDockerCommands(): DockerCommand[] {
+    const raw = vscode.workspace.getConfiguration('folderize.docker').get<unknown[]>('commands', []);
+    return raw.filter((entry): entry is DockerCommand => {
+      if (!entry || typeof entry !== 'object') {
+        return false;
+      }
+      const command = entry as Partial<DockerCommand>;
+      return typeof command.name === 'string' && !!command.name.trim() && typeof command.command === 'string' && !!command.command.trim();
+    });
+  }
+
+  async function saveDockerCommands(commands: DockerCommand[]): Promise<void> {
+    await vscode.workspace
+      .getConfiguration('folderize.docker')
+      .update('commands', commands, vscode.ConfigurationTarget.Global);
+  }
+
+  async function promptDockerCommand(existing?: DockerCommand, initialCommand = ''): Promise<DockerCommand | undefined> {
+    const name = await vscode.window.showInputBox({
+      title: existing ? vscode.l10n.t('Edit saved Docker command') : vscode.l10n.t('New saved Docker command'),
+      prompt: vscode.l10n.t('Name shown in the command list'),
+      value: existing?.name ?? '',
+      validateInput: (value) => value.trim() ? undefined : vscode.l10n.t('Enter a command name.'),
+    });
+    if (name === undefined) {
+      return undefined;
+    }
+    const command = await vscode.window.showInputBox({
+      title: vscode.l10n.t('Docker command'),
+      prompt: vscode.l10n.t('Command to execute inside the container'),
+      value: existing?.command ?? initialCommand,
+      validateInput: (value) => value.trim() ? undefined : vscode.l10n.t('Enter a command.'),
+    });
+    if (command === undefined) {
+      return undefined;
+    }
+    return { name: name.trim(), command: command.trim() };
+  }
+
+  async function openDockerCommandManager(containerItem?: DockerContainerTreeItem): Promise<void> {
+    let commands = getDockerCommands();
+
+    while (true) {
+      type CommandItem = vscode.QuickPickItem & { dockerCommand?: DockerCommand };
+      const quickPick = vscode.window.createQuickPick<CommandItem>();
+      quickPick.placeholder = vscode.l10n.t('Select a command to edit or add a new one');
+      quickPick.items = commands.length
+        ? commands.map((entry) => ({
+            label: `$(terminal) ${entry.name}`,
+            description: entry.command,
+            dockerCommand: entry,
+            buttons: [deleteDockerCommandButton],
+          }))
+        : [{ label: vscode.l10n.t('No saved commands yet.'), description: vscode.l10n.t('Use the edit button to add one.') }];
+
+      let result: { type: 'add' | 'back' | 'select' | 'delete'; item?: CommandItem; text?: string } = { type: 'back' };
+      const picked = await new Promise<typeof result>((resolve) => {
+        quickPick.onDidTriggerItemButton((event) => {
+          result = { type: 'delete', item: event.item };
+          quickPick.hide();
+        });
+        quickPick.onDidAccept(() => {
+          result = quickPick.value.trim()
+            ? { type: 'add', text: quickPick.value.trim() }
+            : { type: 'select', item: quickPick.selectedItems[0] };
+          quickPick.hide();
+        });
+        quickPick.onDidHide(() => {
+          quickPick.dispose();
+          resolve(result);
+        });
+        quickPick.show();
+      });
+
+      if (picked.type === 'back') {
+        return;
+      }
+      if (picked.type === 'add') {
+        if (picked.text) {
+          const command = { name: picked.text, command: picked.text };
+          commands = [...commands, command];
+          await saveDockerCommands(commands);
+        } else {
+          const command = await promptDockerCommand();
+          if (command) {
+            commands = [...commands, command];
+            await saveDockerCommands(commands);
+          }
+        }
+        continue;
+      }
+
+      if (picked.type === 'delete') {
+        const selected = picked.item?.dockerCommand;
+        if (selected) {
+          commands = commands.filter((entry) => entry !== selected);
+          await saveDockerCommands(commands);
+        }
+        continue;
+      }
+
+      const selected = picked.item?.dockerCommand;
+      if (!selected) {
+        continue;
+      }
+      if (containerItem) {
+        if (containerItem.container.state.toLowerCase() !== 'running') {
+          vscode.window.showWarningMessage(vscode.l10n.t('This container must be running to execute a command.'));
+          continue;
+        }
+        dockerCommandTerminal(containerItem, selected.command);
+        return;
+      }
+      const actions = [vscode.l10n.t('Edit command'), vscode.l10n.t('Delete command')];
+      const action = await vscode.window.showQuickPick(actions, { title: selected.name, placeHolder: selected.command });
+      if (action === vscode.l10n.t('Edit command')) {
+        const updated = await promptDockerCommand(selected);
+        if (updated) {
+          commands = commands.map((entry) => entry === selected ? updated : entry);
+          await saveDockerCommands(commands);
+        }
+      } else if (action === vscode.l10n.t('Delete command')) {
+        const confirm = await vscode.window.showWarningMessage(
+          vscode.l10n.t('Delete saved command "{0}"?', selected.name),
+          vscode.l10n.t('Delete')
+        );
+        if (confirm === vscode.l10n.t('Delete')) {
+          commands = commands.filter((entry) => entry !== selected);
+          await saveDockerCommands(commands);
+        }
+      }
+    }
+  }
+
+  function dockerCommandTerminal(item: DockerContainerTreeItem, command: string): void {
+    const existingTerminal = dockerShellTerminals.get(item.container.id);
+    if (existingTerminal) {
+      existingTerminal.show();
+      existingTerminal.sendText(command);
+      return;
+    }
+
+    const terminalMode = vscode.workspace
+      .getConfiguration('folderize.docker')
+      .get<'new' | 'current'>('terminalMode', 'new');
+    const terminal = terminalMode === 'current' && vscode.window.activeTerminal
+      ? vscode.window.activeTerminal
+      : vscode.window.createTerminal(`Docker: ${item.container.name}`);
+    const escapedCommand = command.replace(/'/g, `'"'"'`);
+    terminal.show();
+    terminal.sendText(`docker exec -it '${item.container.id}' sh -lc '${escapedCommand}'`);
+  }
+
+  const dockerShellTerminals = new Map<string, vscode.Terminal>();
+
+  function openDockerShellTerminal(item: DockerContainerTreeItem): void {
+    const existingTerminal = dockerShellTerminals.get(item.container.id);
+    if (existingTerminal) {
+      existingTerminal.show();
+      return;
+    }
+
+    const terminalMode = vscode.workspace
+      .getConfiguration('folderize.docker')
+      .get<'new' | 'current'>('terminalMode', 'new');
+    const terminal = terminalMode === 'current' && vscode.window.activeTerminal
+      ? vscode.window.activeTerminal
+      : vscode.window.createTerminal(`Docker: ${item.container.name}`);
+    dockerShellTerminals.set(item.container.id, terminal);
+    terminal.show();
+    terminal.sendText(dockerExecCommand(item));
+  }
+
+  context.subscriptions.push(vscode.window.onDidCloseTerminal((terminal) => {
+    for (const [containerId, trackedTerminal] of dockerShellTerminals) {
+      if (trackedTerminal === terminal) {
+        dockerShellTerminals.delete(containerId);
+      }
+    }
+  }));
+
   async function openDockerContainerShell(): Promise<void> {
     const projectPath = currentProjectPath();
     if (!projectPath) {
@@ -842,28 +1033,45 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    const picked = await vscode.window.showQuickPick(
-      containers.map((container) => ({
-        label: container.service,
-        description: `${container.name} · ${container.status}`,
-        container,
-      })),
-      { placeHolder: vscode.l10n.t('Choose a container to open its shell') }
-    );
+    type ContainerPickerItem = vscode.QuickPickItem & { container: ContainerInfo };
+    const containerPicker = vscode.window.createQuickPick<ContainerPickerItem>();
+    containerPicker.placeholder = vscode.l10n.t('Choose a container to open its shell');
+    containerPicker.items = containers.map((container) => ({
+      label: container.service,
+      description: `${container.name} · ${container.status}`,
+      container,
+      buttons: [manageDockerCommandsButton],
+    }));
+
+    let pickerResult: { picked?: ContainerPickerItem; manage?: ContainerPickerItem } = {};
+    const pickerPromise = new Promise<typeof pickerResult>((resolve) => {
+      containerPicker.onDidTriggerItemButton((event) => {
+        pickerResult = { manage: event.item };
+        containerPicker.hide();
+        resolve(pickerResult);
+      });
+      containerPicker.onDidAccept(() => {
+        pickerResult = { picked: containerPicker.selectedItems[0] };
+        containerPicker.hide();
+        resolve(pickerResult);
+      });
+      containerPicker.onDidHide(() => {
+        containerPicker.dispose();
+        resolve(pickerResult);
+      });
+      containerPicker.show();
+    });
+    const selectedContainer = await pickerPromise;
+    if (selectedContainer.manage) {
+      await openDockerCommandManager(new DockerContainerTreeItem(selectedContainer.manage.container));
+      return;
+    }
+    const picked = selectedContainer.picked;
     if (!picked) {
       return;
     }
 
-    const item = new DockerContainerTreeItem(picked.container);
-    const terminalMode = vscode.workspace
-      .getConfiguration('folderize.docker')
-      .get<'new' | 'current'>('terminalMode', 'new');
-    const terminal =
-      terminalMode === 'current' && vscode.window.activeTerminal
-        ? vscode.window.activeTerminal
-        : vscode.window.createTerminal(`Docker: ${picked.container.name}`);
-    terminal.show();
-    terminal.sendText(dockerExecCommand(item));
+    openDockerShellTerminal(new DockerContainerTreeItem(picked.container));
   }
 
   context.subscriptions.push(
@@ -1287,19 +1495,11 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('folderize.dockerContainerExec', (item: DockerContainerTreeItem) => {
-      const terminalMode = vscode.workspace
-        .getConfiguration('folderize.docker')
-        .get<'new' | 'current'>('terminalMode', 'new');
-      const terminal =
-        terminalMode === 'current' && vscode.window.activeTerminal
-          ? vscode.window.activeTerminal
-          : vscode.window.createTerminal(`Docker: ${item.container.name}`);
-      terminal.show();
-      // Clears the screen and scrollback right after attaching, so the typed
-      // `docker exec` line doesn't linger above the container's own prompt.
-      // Falls back to a raw ANSI clear sequence when `clear` isn't installed
-      // in the image (common on minimal/distroless containers).
-      terminal.sendText(dockerExecCommand(item));
+      openDockerShellTerminal(item);
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerContainerCommands', async (item: DockerContainerTreeItem) => {
+      await openDockerCommandManager(item);
     }),
 
     vscode.commands.registerCommand('folderize.dockerContainerLogs', (item: DockerContainerTreeItem) => {

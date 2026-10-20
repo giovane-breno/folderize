@@ -49,6 +49,7 @@
   "folderize.command.dockerContainerPause": "Folderize: Pausar container",
   "folderize.command.dockerContainerUnpause": "Folderize: Retomar container",
   "folderize.command.dockerContainerExec": "Folderize: Abrir shell no container",
+  "folderize.command.dockerContainerCommands": "Folderize: Gerenciar comandos do container",
   "folderize.command.dockerContainerLogs": "Folderize: Ver logs do container",
   "folderize.command.dockerContainerOpenBrowser": "Folderize: Abrir container no navegador",
   "folderize.command.dockerContainerCopyExec": "Folderize: Copiar comando docker exec",
@@ -63,5 +64,6 @@
   "folderize.config.projectMeta": "Metadados por projeto (categoria, ordem, favorito, nome de exibição). Gerenciado pela extensão.",
   "folderize.config.excludedPaths": "Caminhos de subpastas escaneadas que foram removidas da listagem.",
   "folderize.config.dockerShell": "Shell para abrir dentro dos containers Docker: auto tenta bash e usa sh como fallback.",
-  "folderize.config.dockerTerminalMode": "Abrir shells Docker em um terminal novo ou enviá-los ao terminal atualmente ativo."
+  "folderize.config.dockerTerminalMode": "Abrir shells Docker em um terminal novo ou enviá-los ao terminal atualmente ativo.",
+  "folderize.config.dockerCommands": "Comandos salvos que podem ser executados dentro dos containers Docker."
 }

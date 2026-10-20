@@ -2,7 +2,7 @@
   "name": "folderize-projects",
   "displayName": "Folderizer",
   "description": "%folderize.description%",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publisher": "giovane-breno",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -283,6 +283,11 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "folderize.dockerContainerCommands",
+        "title": "%folderize.command.dockerContainerCommands%",
+        "icon": "$(terminal)"
+      },
+      {
         "command": "folderize.dockerContainerLogs",
         "title": "%folderize.command.dockerContainerLogs%",
         "icon": "$(output)"
@@ -381,6 +386,11 @@
       ],
       "view/item/context": [
         {
+          "command": "folderize.dockerContainerCommands",
+          "when": "view == folderize.dockerView && viewItem =~ /^container-/",
+          "group": "inline@0"
+        },
+        {
           "command": "folderize.openProject",
           "when": "(view == folderize.projectsView || view == folderize.favoritesView) && viewItem =~ /^(project|projectFavorite)\\b/",
           "group": "1_open@1"
@@ -454,6 +464,11 @@
           "command": "folderize.dockerContainerOpenBrowser",
           "when": "view == folderize.dockerView && viewItem =~ /-ports$/",
           "group": "inline@5"
+        },
+        {
+          "command": "folderize.dockerContainerExec",
+          "when": "view == folderize.dockerView && viewItem =~ /^container-running/",
+          "group": "inline@0"
         },
         {
           "command": "folderize.dockerContainerStop",
@@ -580,6 +595,19 @@
           ],
           "default": "new",
           "description": "%folderize.config.dockerTerminalMode%"
+        },
+        "folderize.docker.commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "command": { "type": "string" }
+            },
+            "required": ["name", "command"]
+          },
+          "default": [],
+          "description": "%folderize.config.dockerCommands%"
         }
       }
     }

@@ -193,5 +193,26 @@
   "Failed to resume \"{0}\": {1}": "Falha ao retomar \"{0}\": {1}",
 
   "Failed to export backup to \"{0}\": {1}": "Falha ao exportar o backup para \"{0}\": {1}",
-  "This backup was created with a newer version of Folderize. Update the extension and try again.": "Esse backup foi criado com uma versão mais nova do Folderize. Atualize a extensão e tente novamente."
+  "This backup was created with a newer version of Folderize. Update the extension and try again.": "Esse backup foi criado com uma versão mais nova do Folderize. Atualize a extensão e tente novamente.",
+  "Manage saved Docker commands": "Gerenciar comandos Docker salvos",
+  "Execute command": "Executar comando",
+  "This container must be running to execute a command.": "Este container precisa estar em execução para executar um comando.",
+  "Saved Docker commands": "Comandos Docker salvos",
+  "Select a command to edit or add a new one": "Selecione um comando para editar ou adicione um novo",
+  "No saved commands yet.": "Nenhum comando salvo ainda.",
+  "Use the edit button to add one.": "Use o botão de edição para adicionar um.",
+  "New saved Docker command": "Novo comando Docker salvo",
+  "Edit saved Docker command": "Editar comando Docker salvo",
+  "Name shown in the command list": "Nome exibido na lista de comandos",
+  "Docker command": "Comando Docker",
+  "Command to execute inside the container": "Comando para executar dentro do container",
+  "Enter a command name.": "Informe um nome para o comando.",
+  "Enter a command.": "Informe um comando.",
+  "Edit command": "Editar comando",
+  "Delete command": "Excluir comando",
+  "Delete saved command \"{0}\"?": "Excluir o comando salvo \"{0}\"?",
+  "Delete": "Excluir",
+  "What do you want to run?": "O que você quer executar?",
+  "Choose a saved command or open the shell": "Escolha um comando salvo ou abra o shell",
+  "Open interactive shell": "Abrir shell interativo"
 }

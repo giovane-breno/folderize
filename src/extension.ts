@@ -42,6 +42,8 @@ import {
   normalizeProjectPath,
   pauseCompose,
   pauseContainer,
+  removeContainer,
+  removeContainers,
   refreshDockerState,
   restartContainer,
   restartCompose,
@@ -1442,6 +1444,46 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
 
+      await refreshDockerState();
+      const normalizedProjectPath = normalizeProjectPath(item.composeFile.projectPath);
+      const otherRunningDirs = getRunningWorkingDirs().filter((dir) => dir !== normalizedProjectPath);
+      if (otherRunningDirs.length > 0) {
+        const projectsByPath = new Map(listProjects().map((p) => [normalizeProjectPath(p.fullPath), p.label]));
+        const names = otherRunningDirs.map((dir) => projectsByPath.get(dir) ?? dir).join(', ');
+        const stopAndStart = vscode.l10n.t('Stop and start');
+        const startAnyway = vscode.l10n.t('Start anyway');
+        const choice = await vscode.window.showWarningMessage(
+          otherRunningDirs.length === 1
+            ? vscode.l10n.t('"{0}" is already running. Stop it before starting "{1}"?', names, item.composeFile.label)
+            : vscode.l10n.t(
+                '{0} other projects are already running ({1}). Stop them before starting "{2}"?',
+                otherRunningDirs.length,
+                names,
+                item.composeFile.label
+              ),
+          { modal: true },
+          stopAndStart,
+          startAnyway
+        );
+        if (choice === undefined) {
+          return;
+        }
+        if (choice === stopAndStart) {
+          for (const dir of otherRunningDirs) {
+            const dirName = projectsByPath.get(dir) ?? dir;
+            const stopped = await runDockerAction(
+              vscode.l10n.t('Stopping Docker containers for {0}…', dirName),
+              () => stopCompose(dir),
+              vscode.l10n.t('Docker containers for {0} stopped.', dirName),
+              (err) => vscode.l10n.t('Failed to stop Docker containers for "{0}": {1}', dirName, err instanceof Error ? err.message : String(err))
+            );
+            if (!stopped) {
+              return;
+            }
+          }
+        }
+      }
+
       await runDockerAction(
         vscode.l10n.t('Starting Docker Compose file {0}…', item.composeFile.label),
         () => startComposeFile(item.composeFile.projectPath, item.composeFile.path),
@@ -1512,6 +1554,49 @@ export function activate(context: vscode.ExtensionContext) {
       );
     }),
 
+    vscode.commands.registerCommand('folderize.dockerRemoveContainer', async (item: DockerContainerTreeItem) => {
+      if (!item?.container?.id) {
+        return;
+      }
+      const confirm = vscode.l10n.t('Delete');
+      const choice = await vscode.window.showWarningMessage(
+        vscode.l10n.t('Delete container "{0}"? Running containers will be stopped.', item.container.name),
+        { modal: true },
+        confirm
+      );
+      if (choice !== confirm) {
+        return;
+      }
+      await runDockerAction(
+        vscode.l10n.t('Deleting container {0}…', item.container.name),
+        () => removeContainer(item.container.id),
+        vscode.l10n.t('Container "{0}" deleted.', item.container.name),
+        (err) => vscode.l10n.t('Failed to delete container "{0}": {1}', item.container.name, err instanceof Error ? err.message : String(err))
+      );
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerRemoveComposeContainers', async (item: DockerComposeTreeItem) => {
+      if (!item?.containers?.length) {
+        vscode.window.showInformationMessage(vscode.l10n.t('No containers to delete in "{0}".', item?.composeFile?.label ?? ''));
+        return;
+      }
+      const confirm = vscode.l10n.t('Delete all');
+      const choice = await vscode.window.showWarningMessage(
+        vscode.l10n.t('Delete all {0} containers from "{1}"? Running containers will be stopped.', item.containers.length, item.composeFile.label),
+        { modal: true },
+        confirm
+      );
+      if (choice !== confirm) {
+        return;
+      }
+      await runDockerAction(
+        vscode.l10n.t('Deleting containers from {0}…', item.composeFile.label),
+        () => removeContainers(item.containers.map((container) => container.id)),
+        vscode.l10n.t('All containers from "{0}" deleted.', item.composeFile.label),
+        (err) => vscode.l10n.t('Failed to delete containers from "{0}": {1}', item.composeFile.label, err instanceof Error ? err.message : String(err))
+      );
+    }),
+
     vscode.commands.registerCommand('folderize.dockerContainerStart', async (item: DockerContainerTreeItem) => {
       if (!item?.container?.id) {
         return;
@@ -1529,6 +1614,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('folderize.dockerContainerStop', async (item: DockerContainerTreeItem) => {
       if (!item?.container?.id) {
+        return;
+      }
+      if (!['running', 'paused'].includes(item.container.state.toLowerCase())) {
         return;
       }
       try {

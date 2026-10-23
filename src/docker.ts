@@ -234,7 +234,7 @@ function runComposeOp(projectPath: string, command: string, timeout: number): Pr
 }
 
 export function startCompose(projectPath: string): Promise<void> {
-  return runComposeOp(projectPath, 'docker compose up -d', 120000);
+  return runComposeOp(projectPath, 'up -d', 120000);
 }
 
 export function startComposeFile(projectPath: string, composeFile: string): Promise<void> {
@@ -243,15 +243,15 @@ export function startComposeFile(projectPath: string, composeFile: string): Prom
 }
 
 export function stopCompose(projectPath: string): Promise<void> {
-  return runComposeOp(projectPath, 'docker compose stop', 60000);
+  return runComposeOp(projectPath, 'stop', 60000);
 }
 
 export function restartCompose(projectPath: string): Promise<void> {
-  return runComposeOp(projectPath, 'docker compose restart', 120000);
+  return runComposeOp(projectPath, 'restart', 120000);
 }
 
 export function pauseCompose(projectPath: string): Promise<void> {
-  return runComposeOp(projectPath, 'docker compose pause', 30000);
+  return runComposeOp(projectPath, 'pause', 30000);
 }
 
 export interface ContainerInfo {
@@ -375,4 +375,16 @@ export function pauseContainer(ref: string): Promise<void> {
 
 export function unpauseContainer(ref: string): Promise<void> {
   return runContainerOp(ref, 'unpause', 15000);
+}
+
+export function removeContainer(ref: string): Promise<void> {
+  return runContainerOp(ref, 'rm -f', 30000);
+}
+
+export function removeContainers(refs: string[]): Promise<void> {
+  if (refs.length === 0) {
+    return Promise.resolve();
+  }
+  refs.forEach(assertContainerRef);
+  return execAsync(`docker rm -f ${refs.join(' ')}`, { timeout: 60000 }).then(() => undefined);
 }

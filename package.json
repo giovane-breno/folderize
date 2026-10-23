@@ -229,8 +229,8 @@
       },
       {
         "command": "folderize.dockerComposeFileStart",
-        "title": "Folderize: Start this Docker Compose file",
-        "icon": "$(tools)"
+        "title": "%folderize.command.dockerComposeFileStart%",
+        "icon": "$(play)"
       },
       {
         "command": "folderize.dockerStop",
@@ -256,6 +256,16 @@
         "command": "folderize.dockerRestartAll",
         "title": "%folderize.command.dockerRestartAll%",
         "icon": "$(debug-restart)"
+      },
+      {
+        "command": "folderize.dockerRemoveContainer",
+        "title": "%folderize.command.dockerRemoveContainer%",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "folderize.dockerRemoveComposeContainers",
+        "title": "%folderize.command.dockerRemoveComposeContainers%",
+        "icon": "$(trash)"
       },
       {
         "command": "folderize.dockerContainerStart",
@@ -452,6 +462,11 @@
           "group": "inline"
         },
         {
+          "command": "folderize.dockerRemoveComposeContainers",
+          "when": "view == folderize.dockerView && viewItem == docker-compose-file",
+          "group": "3_remove@1"
+        },
+        {
           "command": "folderize.dockerStop",
           "when": "(view == folderize.projectsView || view == folderize.favoritesView) && viewItem =~ /docker-running/",
           "group": "inline@1"
@@ -483,7 +498,7 @@
         },
         {
           "command": "folderize.dockerContainerStop",
-          "when": "view == folderize.dockerView && viewItem =~ /^container-(running|paused)/",
+          "when": "view == folderize.dockerView && viewItem =~ /^container-/",
           "group": "inline@3"
         },
         {
@@ -500,6 +515,11 @@
           "command": "folderize.dockerContainerStart",
           "when": "view == folderize.dockerView && viewItem =~ /^container-(exited|created|dead)/",
           "group": "inline"
+        },
+        {
+          "command": "folderize.dockerRemoveContainer",
+          "when": "view == folderize.dockerView && viewItem =~ /^container-/",
+          "group": "3_remove"
         },
         {
           "command": "folderize.renameCategory",

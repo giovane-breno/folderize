@@ -32,7 +32,7 @@ import { openReorderPanel, ReorderCategory } from './reorderPanel';
 import { RootChildItem, RootFolderTreeItem, RootsTreeProvider } from './rootsTreeProvider';
 import {
   ContainerInfo,
-  COMPOSE_FILENAMES,
+  getDockerComposeFiles,
   getRunningWorkingDirs,
   hasDockerCompose,
   invalidateDockerComposeCache,
@@ -46,13 +46,14 @@ import {
   restartContainer,
   restartCompose,
   startCompose,
+  startComposeFile,
   startContainer,
   startDockerEngine,
   stopCompose,
   stopContainer,
   unpauseContainer,
 } from './docker';
-import { DockerContainerTreeItem, DockerContainersProvider } from './dockerViewProvider';
+import { DockerComposeFile, DockerComposeTreeItem, DockerContainerTreeItem, DockerContainersProvider } from './dockerViewProvider';
 
 const BACKUP_VERSION = 1;
 
@@ -83,14 +84,21 @@ export function activate(context: vscode.ExtensionContext) {
     treeDataProvider: rootsProvider,
   });
 
-  // Docker view only ever shows the single project open in this window, matching
-  // the rest of the extension's "one active project per window" assumption (see
-  // stagePendingDockerSwitch below).
   function currentProjectPath(): string | undefined {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   }
 
-  const dockerProvider = new DockerContainersProvider(currentProjectPath);
+  const dockerProvider = new DockerContainersProvider(() => {
+    const projectPath = currentProjectPath();
+    if (!projectPath) {
+      return [];
+    }
+    return getDockerComposeFiles(projectPath).map((composeFile): DockerComposeFile => ({
+      label: path.basename(composeFile),
+      projectPath,
+      path: composeFile,
+    }));
+  });
   const dockerView = vscode.window.createTreeView('folderize.dockerView', {
     treeDataProvider: dockerProvider,
   });
@@ -114,6 +122,7 @@ export function activate(context: vscode.ExtensionContext) {
     treeProvider.refresh();
     favoritesProvider.refresh();
     rootsProvider.refresh();
+    updateDockerViewContext();
     dockerProvider.refresh();
   }
 
@@ -180,7 +189,7 @@ export function activate(context: vscode.ExtensionContext) {
   // since projects live one level under a root folder — see listSubfolders() in
   // projects.ts. A plain (non-`**`) RelativePattern stays non-recursive, so this
   // doesn't turn into a full recursive watch of the whole root tree.
-  const composeGlob = `*/{${COMPOSE_FILENAMES.join(',')}}`;
+  const composeGlob = '*/{docker-compose,compose}*.{yml,yaml}';
 
   let folderWatchers: vscode.Disposable[] = [];
   function setupFolderWatchers(): void {
@@ -214,17 +223,8 @@ export function activate(context: vscode.ExtensionContext) {
           }
         }
         if (isRealDirectory) {
-          // New folder is hidden until the user confirms, so it doesn't show up
-          // in the tree before they've had a chance to decide.
           const config = vscode.workspace.getConfiguration('folderize');
           const excludedPaths = config.get<string[]>('excludedPaths', []);
-          if (!excludedPaths.includes(uri.fsPath)) {
-            await config.update(
-              'excludedPaths',
-              [...excludedPaths, uri.fsPath],
-              vscode.ConfigurationTarget.Global
-            );
-          }
 
           const add = vscode.l10n.t('Add');
           const ignore = vscode.l10n.t('Ignore');
@@ -233,7 +233,13 @@ export function activate(context: vscode.ExtensionContext) {
             add,
             ignore
           );
-          if (choice === add) {
+          if (choice === ignore && !excludedPaths.includes(uri.fsPath)) {
+            await config.update(
+              'excludedPaths',
+              [...excludedPaths, uri.fsPath],
+              vscode.ConfigurationTarget.Global
+            );
+          } else if (choice === add) {
             await unexcludePath(uri.fsPath);
           }
         }
@@ -261,7 +267,7 @@ export function activate(context: vscode.ExtensionContext) {
     const explicitProjects = vscode.workspace.getConfiguration('folderize').get<string[]>('projects', []);
     for (const projectPath of explicitProjects) {
       const watcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(projectPath, `{${COMPOSE_FILENAMES.join(',')}}`)
+        new vscode.RelativePattern(projectPath, '{docker-compose,compose}*.{yml,yaml}')
       );
       const invalidateAndRefresh = () => {
         invalidateDockerComposeCache(projectPath);
@@ -1284,11 +1290,25 @@ export function activate(context: vscode.ExtensionContext) {
       async (item: ProjectTreeItem, selected?: ProjectTreeItem[]) => {
         const targets = selected && selected.length > 0 ? selected : [item];
         const fromRootFolder = targets.filter((t) => isFromScannedRootFolder(t.fullPath));
+        const missingTargets = targets.filter((t) => !fs.existsSync(t.fullPath));
 
-        if (fromRootFolder.length > 0) {
-          const names = fromRootFolder.map((t) => t.label).join(', ');
+        if (fromRootFolder.length > 0 || missingTargets.length > 0) {
+          const names = (fromRootFolder.length > 0 ? fromRootFolder : missingTargets)
+            .map((t) => t.label)
+            .join(', ');
+          const removingMissing = missingTargets.length > 0 && fromRootFolder.length === 0;
           const confirm = await vscode.window.showWarningMessage(
-            fromRootFolder.length === 1
+            removingMissing
+              ? missingTargets.length === 1
+                ? vscode.l10n.t(
+                    'The folder "{0}" no longer exists on disk. Remove it from Folderize?',
+                    names
+                  )
+                : vscode.l10n.t(
+                    '{0} selected folders no longer exist on disk. Remove them from Folderize?',
+                    missingTargets.length
+                  )
+              : fromRootFolder.length === 1
               ? vscode.l10n.t(
                   'Remove "{0}" from the listing? The folder stays on disk, but is hidden until you add it again.',
                   names
@@ -1372,6 +1392,20 @@ export function activate(context: vscode.ExtensionContext) {
       );
     }),
 
+    vscode.commands.registerCommand('folderize.dockerComposeFileStart', async (item: DockerComposeTreeItem) => {
+      await runDockerAction(
+        vscode.l10n.t('Starting Docker Compose file {0}…', item.composeFile.label),
+        () => startComposeFile(item.composeFile.projectPath, item.composeFile.path),
+        vscode.l10n.t('Docker Compose file {0} started.', item.composeFile.label),
+        (err) => vscode.l10n.t(
+          'Failed to start Docker Compose file "{0}": {1}',
+          item.composeFile.label,
+          err instanceof Error ? err.message : String(err)
+        )
+      );
+      dockerProvider.refresh();
+    }),
+
     vscode.commands.registerCommand('folderize.dockerStop', async (item: ProjectTreeItem) => {
       await runDockerAction(
         vscode.l10n.t('Stopping Docker containers for {0}…', item.label),
@@ -1430,6 +1464,9 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('folderize.dockerContainerStart', async (item: DockerContainerTreeItem) => {
+      if (!item?.container?.id) {
+        return;
+      }
       try {
         await startContainer(item.container.id);
       } catch (err) {
@@ -1442,6 +1479,9 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('folderize.dockerContainerStop', async (item: DockerContainerTreeItem) => {
+      if (!item?.container?.id) {
+        return;
+      }
       try {
         await stopContainer(item.container.id);
       } catch (err) {
@@ -1454,6 +1494,9 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('folderize.dockerContainerRestart', async (item: DockerContainerTreeItem) => {
+      if (!item?.container?.id) {
+        return;
+      }
       try {
         await restartContainer(item.container.id);
       } catch (err) {
@@ -1466,6 +1509,9 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('folderize.dockerContainerPause', async (item: DockerContainerTreeItem) => {
+      if (!item?.container?.id) {
+        return;
+      }
       try {
         await pauseContainer(item.container.id);
       } catch (err) {
@@ -1478,6 +1524,9 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('folderize.dockerContainerUnpause', async (item: DockerContainerTreeItem) => {
+      if (!item?.container?.id) {
+        return;
+      }
       try {
         await unpauseContainer(item.container.id);
       } catch (err) {

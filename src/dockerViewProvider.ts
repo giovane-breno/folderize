@@ -1,12 +1,28 @@
 import * as vscode from 'vscode';
-import { ContainerInfo, listContainersForProject } from './docker';
+import { ContainerInfo, listContainersForComposeFile } from './docker';
+
+export interface DockerComposeFile {
+  label: string;
+  projectPath: string;
+  path: string;
+}
+
+export class DockerComposeTreeItem extends vscode.TreeItem {
+  constructor(public readonly composeFile: DockerComposeFile, public readonly containers: ContainerInfo[]) {
+    super(composeFile.label, vscode.TreeItemCollapsibleState.Expanded);
+    this.description = vscode.l10n.t('{0} containers', containers.length);
+    this.contextValue = 'docker-compose-file';
+    this.iconPath = new vscode.ThemeIcon('server-environment');
+    this.tooltip = composeFile.path;
+  }
+}
 
 export class DockerContainerTreeItem extends vscode.TreeItem {
-  constructor(public readonly container: ContainerInfo) {
+  constructor(public readonly container: ContainerInfo, composeProject?: string) {
     super(container.service, vscode.TreeItemCollapsibleState.None);
 
     const normalizedState = container.state.toLowerCase();
-    this.description = container.status;
+    this.description = composeProject ? `${container.status} · ${composeProject}` : container.status;
     this.tooltip = `${container.name}\n${container.image}\n${container.status}${
       normalizedState === 'running' ? `\n${vscode.l10n.t('Click to open a shell in the container')}` : ''
     }`;
@@ -29,28 +45,41 @@ export class DockerContainerTreeItem extends vscode.TreeItem {
   }
 }
 
-export class DockerContainersProvider implements vscode.TreeDataProvider<DockerContainerTreeItem> {
+type DockerTreeItem = DockerComposeTreeItem | DockerContainerTreeItem;
+
+export class DockerContainersProvider implements vscode.TreeDataProvider<DockerTreeItem> {
   private readonly onDidChangeTreeDataEmitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
 
-  constructor(private readonly getProjectPath: () => string | undefined) {}
+  constructor(private readonly getComposeFiles: () => DockerComposeFile[]) {}
 
   refresh(): void {
     this.onDidChangeTreeDataEmitter.fire();
   }
 
-  getTreeItem(element: DockerContainerTreeItem): vscode.TreeItem {
+  getTreeItem(element: DockerTreeItem): vscode.TreeItem {
     return element;
   }
 
-  async getChildren(): Promise<DockerContainerTreeItem[]> {
-    const projectPath = this.getProjectPath();
-    if (!projectPath) {
+  async getChildren(element?: DockerTreeItem): Promise<DockerTreeItem[]> {
+    if (element instanceof DockerComposeTreeItem) {
+      return element.containers
+        .sort((a, b) => a.service.localeCompare(b.service))
+        .map((container) => new DockerContainerTreeItem(container));
+    }
+
+    const composeFiles = this.getComposeFiles();
+    if (composeFiles.length === 0) {
       return [];
     }
-    const containers = await listContainersForProject(projectPath);
-    return containers
-      .sort((a, b) => a.service.localeCompare(b.service))
-      .map((container) => new DockerContainerTreeItem(container));
+    const groups = await Promise.all(
+      composeFiles.map(async (composeFile) => ({
+        composeFile,
+        containers: await listContainersForComposeFile(composeFile.projectPath, composeFile.path),
+      }))
+    );
+    return groups
+      .sort((a, b) => a.composeFile.label.localeCompare(b.composeFile.label))
+      .map(({ composeFile, containers }) => new DockerComposeTreeItem(composeFile, containers));
   }
 }

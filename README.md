@@ -19,9 +19,9 @@ Folderize is local-first: project paths and preferences stay in VS Code settings
 
 ## Docker Compose
 
-Folderize recognizes projects containing `docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, or `compose.yaml`.
+Folderize recognizes projects containing `docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, or `compose.yaml`, as well as additional files such as `docker-compose.dev.yml` and `compose.test.yaml`.
 
-For those projects, it shows the Docker state and lets you start, stop, restart, or pause containers. The Docker view also lists each container and its current state. Docker is optional: projects without Compose files work normally.
+For those projects, it shows the Docker state and lets you start, stop, restart, or pause containers. When multiple Compose files are present in the same project folder, the Docker view shows one group per file (`dev`, `prod`, `stack`, etc.) with that file's containers underneath. Docker actions pass the recognized Compose files to Compose in a stable order. Docker is optional: projects without Compose files work normally.
 
 ## Getting started
 

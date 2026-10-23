@@ -4,6 +4,31 @@ import * as path from 'path';
 
 export const COMPOSE_FILENAMES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
 
+// Docker Compose also supports project-specific files such as
+// `docker-compose.dev.yml` or `compose.test.yaml`. Keep the conventional base
+// files first because Compose applies later files as overrides.
+const COMPOSE_FILE_RE = /^(?:docker-compose|compose)(?:\..+)?\.(?:yml|yaml)$/i;
+
+export function getDockerComposeFiles(projectPath: string): string[] {
+  let filenames: string[];
+  try {
+    filenames = fs.readdirSync(projectPath, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && COMPOSE_FILE_RE.test(entry.name))
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+
+  const conventionalOrder = new Map(COMPOSE_FILENAMES.map((name, index) => [name, index]));
+  return filenames
+    .sort((a, b) => {
+      const orderA = conventionalOrder.get(a.toLowerCase()) ?? COMPOSE_FILENAMES.length;
+      const orderB = conventionalOrder.get(b.toLowerCase()) ?? COMPOSE_FILENAMES.length;
+      return orderA - orderB || a.localeCompare(b);
+    })
+    .map((filename) => path.join(projectPath, filename));
+}
+
 // Compose-file presence rarely changes during a session (it's a property of the
 // project's directory layout), so it's cached per path instead of re-stat'd on
 // every tree render. Invalidated explicitly when the set of projects/folders changes.
@@ -14,7 +39,7 @@ export function hasDockerCompose(projectPath: string): boolean {
   if (cached !== undefined) {
     return cached;
   }
-  const result = COMPOSE_FILENAMES.some((name) => fs.existsSync(path.join(projectPath, name)));
+  const result = getDockerComposeFiles(projectPath).length > 0;
   composeCache.set(projectPath, result);
   return result;
 }
@@ -45,6 +70,12 @@ export function normalizeProjectPath(projectPath: string): string {
     resolved = fs.realpathSync(projectPath);
   } catch {
     resolved = path.resolve(projectPath);
+  }
+  // macOS and Windows use case-insensitive filesystems by default. Docker can
+  // preserve the casing from the shell invocation in its working_dir label,
+  // while VS Code may provide the path with different casing.
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    resolved = resolved.toLowerCase();
   }
   realpathCache.set(projectPath, resolved);
   return resolved;
@@ -168,12 +199,30 @@ async function doRefreshDockerState(): Promise<boolean> {
 // Sharing one in-flight promise per path avoids that race entirely.
 const inFlightOps = new Map<string, Promise<void>>();
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function composeFilesForSelection(projectPath: string, selectedFile: string): string[] {
+  const allFiles = getDockerComposeFiles(projectPath);
+  const baseFile = allFiles.find((file) => COMPOSE_FILENAMES.includes(path.basename(file).toLowerCase()));
+  if (baseFile && path.resolve(baseFile) !== path.resolve(selectedFile)) {
+    return [baseFile, selectedFile];
+  }
+  return [selectedFile];
+}
+
+function composeCommand(projectPath: string, command: string, composeFiles = getDockerComposeFiles(projectPath)): string {
+  const fileArguments = composeFiles.map((file) => `-f ${shellQuote(file)}`).join(' ');
+  return `docker compose${fileArguments ? ` ${fileArguments}` : ''} ${command}`;
+}
+
 function runComposeOp(projectPath: string, command: string, timeout: number): Promise<void> {
   const existing = inFlightOps.get(projectPath);
   if (existing) {
     return existing;
   }
-  const promise = execAsync(command, { cwd: projectPath, timeout })
+  const promise = execAsync(composeCommand(projectPath, command), { cwd: projectPath, timeout })
     .then(() => undefined)
     .finally(() => {
       if (inFlightOps.get(projectPath) === promise) {
@@ -186,6 +235,11 @@ function runComposeOp(projectPath: string, command: string, timeout: number): Pr
 
 export function startCompose(projectPath: string): Promise<void> {
   return runComposeOp(projectPath, 'docker compose up -d', 120000);
+}
+
+export function startComposeFile(projectPath: string, composeFile: string): Promise<void> {
+  return execAsync(composeCommand(projectPath, 'up -d', composeFilesForSelection(projectPath, composeFile)), { cwd: projectPath, timeout: 120000 })
+    .then(() => undefined);
 }
 
 export function stopCompose(projectPath: string): Promise<void> {
@@ -210,6 +264,8 @@ export interface ContainerInfo {
   /** Raw `docker ps` state: running | paused | exited | created | restarting | dead | … */
   state: string;
   status: string;
+  /** Compose project name, useful when multiple Compose files run independently. */
+  composeProject?: string;
 }
 
 // Same working_dir mismatch problem as isDockerRunning(): the label is read from
@@ -221,10 +277,10 @@ export async function listContainersForProject(projectPath: string): Promise<Con
   let output: string;
   try {
     output = await execAsync(
-      'docker ps -a --filter "label=com.docker.compose.project.working_dir" ' +
-        '--format "{{.ID}}\\t{{.Names}}\\t{{.State}}\\t{{.Status}}\\t{{.Image}}\\t' +
+      'docker ps -a --format "{{.ID}}\\t{{.Names}}\\t{{.State}}\\t{{.Status}}\\t{{.Image}}\\t' +
         '{{.Label \\"com.docker.compose.service\\"}}\\t{{.Ports}}\\t' +
-        '{{.Label \\"com.docker.compose.project.working_dir\\"}}"',
+        '{{.Label \\"com.docker.compose.project.working_dir\\"}}\\t' +
+        '{{.Label \\"com.docker.compose.project\\"}}"',
       { timeout: 5000 }
     );
   } catch {
@@ -235,11 +291,54 @@ export async function listContainersForProject(projectPath: string): Promise<Con
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const [id, name, state, status, image, service, ports, workingDir] = line.split('\t');
-      return { id, name, state, status, image, service: service || name, ports: ports || '', workingDir: workingDir || '' };
+      const [id, name, state, status, image, service, ports, workingDir, composeProject] = line.split('\t');
+      return {
+        id,
+        name,
+        state,
+        status,
+        image,
+        service: service || name,
+        ports: ports || '',
+        workingDir: workingDir || '',
+        composeProject: composeProject || undefined,
+      };
     })
     .filter((c) => c.workingDir && normalizeProjectPath(c.workingDir) === target)
     .map(({ workingDir: _workingDir, ...container }) => container);
+}
+
+/**
+ * Lists only the services declared by one Compose file. This matters when a
+ * folder contains independent dev/prod/stack Compose files that share the
+ * same Docker working directory.
+ */
+export async function listContainersForComposeFile(
+  projectPath: string,
+  composeFile: string
+): Promise<ContainerInfo[]> {
+  let projectName: string | undefined;
+  let services: Set<string> | undefined;
+  try {
+    const config = await execAsync(
+      composeCommand(projectPath, 'config --format json', composeFilesForSelection(projectPath, composeFile)),
+      { cwd: projectPath, timeout: 5000 }
+    );
+    const parsed = JSON.parse(config) as { name?: string; services?: Record<string, unknown> };
+    projectName = parsed.name;
+    services = parsed.services ? new Set(Object.keys(parsed.services)) : undefined;
+  } catch {
+    // Keep the file visible even when its configuration is incomplete; an
+    // empty result is preferable to hiding the Compose file entirely.
+  }
+
+  const containers = await listContainersForProject(projectPath);
+  return containers.filter((container) => {
+    if (projectName && container.composeProject && container.composeProject !== projectName) {
+      return false;
+    }
+    return !services || services.has(container.service);
+  });
 }
 
 // Container IDs/names from `docker ps` are always alphanumeric (plus - and _),

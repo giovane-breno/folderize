@@ -228,6 +228,11 @@
         "icon": "$(play)"
       },
       {
+        "command": "folderize.dockerComposeFileStart",
+        "title": "Folderize: Start this Docker Compose file",
+        "icon": "$(play)"
+      },
+      {
         "command": "folderize.dockerStop",
         "title": "%folderize.command.dockerStop%",
         "icon": "$(debug-stop)"
@@ -386,11 +391,6 @@
       ],
       "view/item/context": [
         {
-          "command": "folderize.dockerContainerCommands",
-          "when": "view == folderize.dockerView && viewItem =~ /^container-/",
-          "group": "inline@0"
-        },
-        {
           "command": "folderize.openProject",
           "when": "(view == folderize.projectsView || view == folderize.favoritesView) && viewItem =~ /^(project|projectFavorite)\\b/",
           "group": "1_open@1"
@@ -438,6 +438,11 @@
         {
           "command": "folderize.dockerStart",
           "when": "(view == folderize.projectsView || view == folderize.favoritesView) && viewItem =~ /docker-stopped/",
+          "group": "inline"
+        },
+        {
+          "command": "folderize.dockerComposeFileStart",
+          "when": "view == folderize.dockerView && viewItem == docker-compose-file",
           "group": "inline"
         },
         {

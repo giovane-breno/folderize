@@ -1436,7 +1436,12 @@ export function activate(context: vscode.ExtensionContext) {
       );
     }),
 
-    vscode.commands.registerCommand('folderize.dockerComposeFileStart', async (item: DockerComposeTreeItem) => {
+    vscode.commands.registerCommand('folderize.dockerComposeFileStart', async (item: DockerComposeTreeItem | undefined) => {
+      if (!item?.composeFile) {
+        vscode.window.showWarningMessage(vscode.l10n.t('Select a Docker Compose file in the Docker view first.'));
+        return;
+      }
+
       await runDockerAction(
         vscode.l10n.t('Starting Docker Compose file {0}…', item.composeFile.label),
         () => startComposeFile(item.composeFile.projectPath, item.composeFile.path),

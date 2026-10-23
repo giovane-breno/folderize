@@ -230,7 +230,7 @@
       {
         "command": "folderize.dockerComposeFileStart",
         "title": "Folderize: Start this Docker Compose file",
-        "icon": "$(play)"
+        "icon": "$(tools)"
       },
       {
         "command": "folderize.dockerStop",
@@ -327,6 +327,12 @@
       }
     ],
     "menus": {
+      "commandPalette": [
+        {
+          "command": "folderize.dockerComposeFileStart",
+          "when": "false"
+        }
+      ],
       "view/title": [
         {
           "command": "folderize.add",

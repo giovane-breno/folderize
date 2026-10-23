@@ -32,6 +32,7 @@ import { openReorderPanel, ReorderCategory } from './reorderPanel';
 import { RootChildItem, RootFolderTreeItem, RootsTreeProvider } from './rootsTreeProvider';
 import {
   ContainerInfo,
+  buildComposeFile,
   buildComposeFileCommand,
   getDockerComposeFiles,
   getRunningWorkingDirs,
@@ -1485,7 +1486,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
       }
 
-      await runDockerAction(
+      const started = await runDockerAction(
         vscode.l10n.t('Starting Docker Compose file {0}…', item.composeFile.label),
         () => startComposeFile(item.composeFile.projectPath, item.composeFile.path),
         vscode.l10n.t('Docker Compose file {0} started.', item.composeFile.label),
@@ -1495,6 +1496,38 @@ export function activate(context: vscode.ExtensionContext) {
           err instanceof Error ? err.message : String(err)
         )
       );
+      if (!started) {
+        const buildAndRetry = vscode.l10n.t('Build and try again');
+        const choice = await vscode.window.showWarningMessage(
+          vscode.l10n.t('Starting "{0}" failed. Build the image and try again?', item.composeFile.label),
+          { modal: true },
+          buildAndRetry
+        );
+        if (choice === buildAndRetry) {
+          const built = await runDockerAction(
+            vscode.l10n.t('Building Docker Compose file {0}…', item.composeFile.label),
+            () => buildComposeFile(item.composeFile.projectPath, item.composeFile.path),
+            vscode.l10n.t('Docker Compose file {0} built.', item.composeFile.label),
+            (err) => vscode.l10n.t(
+              'Failed to build Docker Compose file "{0}": {1}',
+              item.composeFile.label,
+              err instanceof Error ? err.message : String(err)
+            )
+          );
+          if (built) {
+            await runDockerAction(
+              vscode.l10n.t('Starting Docker Compose file {0}…', item.composeFile.label),
+              () => startComposeFile(item.composeFile.projectPath, item.composeFile.path),
+              vscode.l10n.t('Docker Compose file {0} started.', item.composeFile.label),
+              (err) => vscode.l10n.t(
+                'Failed to start Docker Compose file "{0}": {1}',
+                item.composeFile.label,
+                err instanceof Error ? err.message : String(err)
+              )
+            );
+          }
+        }
+      }
       dockerProvider.refresh();
     }),
 

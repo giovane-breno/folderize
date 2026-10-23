@@ -242,6 +242,15 @@ export function startComposeFile(projectPath: string, composeFile: string): Prom
     .then(() => undefined);
 }
 
+export function buildComposeFile(projectPath: string, composeFile: string): Promise<void> {
+  return execAsync(buildComposeFileCommand(projectPath, composeFile), { cwd: projectPath, timeout: 300000 })
+    .then(() => undefined);
+}
+
+export function buildComposeFileCommand(projectPath: string, composeFile: string): string {
+  return composeCommand(projectPath, 'build', composeFilesForSelection(projectPath, composeFile));
+}
+
 export function stopCompose(projectPath: string): Promise<void> {
   return runComposeOp(projectPath, 'stop', 60000);
 }

@@ -2,7 +2,7 @@
   "name": "folderize-projects",
   "displayName": "Folderizer",
   "description": "%folderize.description%",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "publisher": "giovane-breno",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -233,6 +233,11 @@
         "icon": "$(play)"
       },
       {
+        "command": "folderize.dockerComposeFileBuild",
+        "title": "%folderize.command.dockerComposeFileBuild%",
+        "icon": "$(tools)"
+      },
+      {
         "command": "folderize.dockerStop",
         "title": "%folderize.command.dockerStop%",
         "icon": "$(debug-stop)"
@@ -460,6 +465,11 @@
           "command": "folderize.dockerComposeFileStart",
           "when": "view == folderize.dockerView && viewItem == docker-compose-file",
           "group": "inline"
+        },
+        {
+          "command": "folderize.dockerComposeFileBuild",
+          "when": "view == folderize.dockerView && viewItem == docker-compose-file",
+          "group": "inline@1"
         },
         {
           "command": "folderize.dockerRemoveComposeContainers",

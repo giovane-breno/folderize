@@ -32,6 +32,7 @@ import { openReorderPanel, ReorderCategory } from './reorderPanel';
 import { RootChildItem, RootFolderTreeItem, RootsTreeProvider } from './rootsTreeProvider';
 import {
   ContainerInfo,
+  buildComposeFileCommand,
   getDockerComposeFiles,
   getRunningWorkingDirs,
   hasDockerCompose,
@@ -1495,6 +1496,23 @@ export function activate(context: vscode.ExtensionContext) {
         )
       );
       dockerProvider.refresh();
+    }),
+
+    vscode.commands.registerCommand('folderize.dockerComposeFileBuild', async (item: DockerComposeTreeItem | undefined) => {
+      if (!item?.composeFile) {
+        vscode.window.showWarningMessage(vscode.l10n.t('Select a Docker Compose file in the Docker view first.'));
+        return;
+      }
+
+      if (!(await ensureDockerEngine())) {
+        return;
+      }
+      const terminal = vscode.window.createTerminal({
+        name: `Docker build: ${item.composeFile.label}`,
+        cwd: item.composeFile.projectPath,
+      });
+      terminal.show();
+      terminal.sendText(buildComposeFileCommand(item.composeFile.projectPath, item.composeFile.path));
     }),
 
     vscode.commands.registerCommand('folderize.dockerStop', async (item: ProjectTreeItem) => {

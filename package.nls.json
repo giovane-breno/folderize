@@ -41,6 +41,7 @@
   "folderize.command.dockerStop": "Folderize: Stop Docker containers",
   "folderize.command.dockerRestart": "Folderize: Restart Docker containers",
   "folderize.command.dockerComposeFileStart": "Folderize: Start all containers in this Compose file",
+  "folderize.command.dockerComposeFileBuild": "Folderize: Build this Compose file",
   "folderize.command.dockerStartAll": "Folderize: Start all containers",
   "folderize.command.dockerPauseAll": "Folderize: Pause all containers",
   "folderize.command.dockerRestartAll": "Folderize: Restart all containers",

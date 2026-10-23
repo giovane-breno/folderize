@@ -611,6 +611,47 @@ export function activate(context: vscode.ExtensionContext) {
   // Wraps a docker compose action with a progress spinner while it runs and a
   // notification once it's done — so it's never ambiguous whether a start/stop
   // that can take a while (image pulls, builds) has actually finished.
+  async function ensureDockerEngine(): Promise<boolean> {
+    await refreshDockerState();
+    if (isDockerAvailable()) {
+      return true;
+    }
+
+    const startDocker = vscode.l10n.t('Start Docker');
+    const choice = await vscode.window.showWarningMessage(
+      vscode.l10n.t('Docker is not running. Start Docker?'),
+      startDocker
+    );
+    if (choice !== startDocker) {
+      return false;
+    }
+
+    try {
+      await startDockerEngine();
+    } catch (err) {
+      vscode.window.showErrorMessage(
+        vscode.l10n.t('Failed to start Docker: {0}', err instanceof Error ? err.message : String(err))
+      );
+      return false;
+    }
+
+    // `open -a OrbStack` returns before the Docker API is ready. Wait briefly
+    // for the daemon so the original Compose action can continue automatically.
+    vscode.window.showInformationMessage(
+      vscode.l10n.t('Docker is starting. Folderize will retry when it is ready.')
+    );
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await refreshDockerState();
+      if (isDockerAvailable()) {
+        return true;
+      }
+    }
+
+    vscode.window.showErrorMessage(vscode.l10n.t('Docker is still starting. Try the Docker action again in a moment.'));
+    return false;
+  }
+
   async function runDockerAction(
     progressTitle: string,
     action: () => Promise<void>,
@@ -618,6 +659,9 @@ export function activate(context: vscode.ExtensionContext) {
     errorMessage: (err: unknown) => string
   ): Promise<boolean> {
     try {
+      if (!(await ensureDockerEngine())) {
+        return false;
+      }
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: progressTitle },
         action
@@ -963,9 +1007,9 @@ export function activate(context: vscode.ExtensionContext) {
     if (containers.length === 0) {
       await refreshDockerState();
       if (!isDockerAvailable()) {
-        const startDocker = vscode.l10n.t('Start Docker Desktop');
+        const startDocker = vscode.l10n.t('Start Docker');
         const choice = await vscode.window.showWarningMessage(
-          vscode.l10n.t('Docker is not running. Start Docker Desktop?'),
+          vscode.l10n.t('Docker is not running. Start Docker?'),
           startDocker
         );
         if (choice !== startDocker) {
@@ -976,7 +1020,7 @@ export function activate(context: vscode.ExtensionContext) {
           vscode.window.showInformationMessage(vscode.l10n.t('Docker Desktop is starting. Click the Docker button again when it is ready.'));
         } catch (err) {
           vscode.window.showErrorMessage(
-            vscode.l10n.t('Failed to start Docker Desktop: {0}', err instanceof Error ? err.message : String(err))
+            vscode.l10n.t('Failed to start Docker: {0}', err instanceof Error ? err.message : String(err))
           );
         }
         return;

@@ -2,6 +2,7 @@ node_modules/
 dist/
 out/
 *.vsix
+!versions/**/*.vsix
 .DS_Store
 .vscode-test/
 npm-debug.log*
